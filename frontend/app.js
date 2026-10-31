@@ -10,8 +10,8 @@ function setMic(active){$('mic').classList.toggle('recording',active);$('mic').r
 function answerBubble(result){
   const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
   const answer=bubble(text,'assistant');
-  answer.querySelector('.message-role').textContent=result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
-  if(result.ai_issue){const status=node('small','answer-status','KI derzeit nicht verfügbar · lokale Ersatzantwort');status.title=result.ai_issue;answer.append(status);}
+  answer.querySelector('.message-role').textContent=result.answer_mode==='live'?'BUTLER · LIVE-ABFRAGE':result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
+  if(result.ai_issue){const status=node('small','answer-status',result.ai_issue.includes('429')?'KI-Anfragelimit erreicht · lokale Antwort':'KI-Auswertung nicht verfügbar · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
   if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
   return answer;
 }
@@ -105,7 +105,7 @@ function showEvidence(sources,diagnostics=[]) {
     const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS'}[source.source]||'KONTEXT';
     const title=document.createElement('h3');title.textContent=source.title;
     const excerpt=document.createElement('div');excerpt.className='evidence-excerpt';excerpt.textContent=source.excerpt||'Kein Textauszug verfügbar.';card.append(type,title);
-    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent='Dokumentdatum: '+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
+    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):'Dokumentdatum: '+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
     card.append(excerpt);
     if(source.url && /^https?:\/\//i.test(source.url)) {
       const link=document.createElement('a');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Original in Paperless öffnen ↗';card.append(link);

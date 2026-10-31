@@ -25,6 +25,9 @@ class Worker:
         self.smart_inventory=None
         self.smart_inventory_key=None
         self.smart_inventory_time=0
+        self.light_enums=None
+        self.light_enums_key=None
+        self.light_enums_time=0
 
     async def search_mail_context(self, question, sender_hint=None, queries=None):
         # Historical mail is retrieved only for an explicit matching user question.
@@ -79,6 +82,28 @@ class Worker:
         except Exception:
             self.status['sources']['smart_context']={'error':'Zusätzliche Geräte konnten nicht gelesen werden; vorhandene Zustände bleiben verfügbar.'}
             return []
+
+    async def lighting_context(self,question):
+        from .lighting import read_lights
+        settings=self.s.model_copy()
+        identity=(settings.iobroker_url,settings.iobroker_user,settings.iobroker_token,settings.iobroker_password)
+        inventory=self.smart_inventory if self.smart_inventory_key==identity and time.monotonic()-self.smart_inventory_time<300 else None
+        enums=self.light_enums if self.light_enums_key==identity and time.monotonic()-self.light_enums_time<300 else None
+        try:
+            result,inventory,enums=await asyncio.wait_for(read_lights(settings,question,inventory,enums),timeout=45)
+            if inventory is not None:
+                self.smart_inventory=inventory;self.smart_inventory_key=identity;self.smart_inventory_time=time.monotonic()
+            if enums is not None:
+                self.light_enums=enums;self.light_enums_key=identity;self.light_enums_time=time.monotonic()
+            if result.get('fresh'):
+                states=[{'id':state['id'],'name':state['name'],'value':state['value'],'status':'unknown' if state['on'] is None else 'value','source_ts':state['source_ts']} for state in result['lights']]
+                self.store.record_smart_states(scope(settings),states,result['checked'])
+            self.status['sources']['lighting']={'checked':result['checked'],'fetched':len(result['lights']),'unknown':sum(state['on'] is None for state in result['lights'])}
+            if result.get('error'):self.status['sources']['lighting']['error']=result['error']
+            return result
+        except Exception:
+            self.status['sources']['lighting']={'error':'Aktuelle Lichtzustände konnten nicht gelesen werden.'}
+            return {'checked':utc_now(),'lights':[],'fresh':False,'error':'Ich kann die aktuellen Lichtzustände gerade nicht aus ioBroker lesen.','diagnostics':[]}
 
     async def poll_ntfy(self):
         if not self.s.ntfy_history_enabled:

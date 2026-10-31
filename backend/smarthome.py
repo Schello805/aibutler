@@ -8,6 +8,8 @@ import httpx
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
+SENSITIVE_ID = r'password|passwd|token|secret|api.?key|aes.?key|private.?key|auth.?key'
+
 DEFAULT_PATTERNS = '*.connected,*.reachable,*.online,*.UNREACH'
 
 class IoBrokerConfig(BaseModel):
@@ -88,7 +90,7 @@ async def read_iobroker(settings):
                 if not isinstance(state,dict) or 'val' not in state:
                     raise ValueError('Ungültige Zustandsliste')
                 # Credentials never belong in the inventory, even with a broad user pattern.
-                if re.search(r'password|passwd|token|secret|api.?key',state_id,re.I):
+                if re.search(SENSITIVE_ID,state_id,re.I):
                     continue
                 common=state.get('common') or {}
                 name=common.get('name',state_id)
@@ -104,6 +106,28 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+async def state_inventory(client,settings):
+    async with client.stream('GET',settings.iobroker_url.rstrip('/')+'/objects',params={'type':'state'}) as response:
+        response.raise_for_status();buffer=bytearray()
+        async for chunk in response.aiter_bytes():
+            buffer.extend(chunk)
+            if len(buffer)>32*1024*1024:raise ValueError('ioBroker inventory too large')
+    objects=json.loads(buffer);inventory=[]
+    if not isinstance(objects,dict) or 'error' in objects:raise ValueError('Invalid ioBroker inventory')
+    for state_id,obj in objects.items():
+        if not isinstance(obj,dict) or obj.get('type')!='state':continue
+        common=obj.get('common') or {}
+        if common.get('read') is False or re.search(SENSITIVE_ID,state_id,re.I):continue
+        name=common.get('name') or state_id
+        if isinstance(name,dict):name=name.get('de') or name.get('en') or state_id
+        # Native adapter configuration never enters the model context or the local inventory.
+        alias=(common.get('alias') or {}).get('id') if isinstance(common.get('alias'),dict) else None
+        if isinstance(alias,dict):alias=alias.get('read')
+        if isinstance(alias,str) and re.search(SENSITIVE_ID,alias,re.I):continue
+        inventory.append({'id':state_id,'name':str(name)[:300],'role':common.get('role',''),'unit':common.get('unit',''),'value_type':common.get('type'),'alias_id':alias if isinstance(alias,str) else None})
+    return inventory
+
+
 async def relevant_states(settings,queries,inventory=None):
     """Discover readable signals by ioBroker object names/IDs; retrieve selected values only."""
     if not settings.iobroker_url or settings.iobroker_api!='simple':return [],inventory
@@ -115,21 +139,7 @@ async def relevant_states(settings,queries,inventory=None):
     auth=httpx.BasicAuth(settings.iobroker_user,settings.iobroker_password or '') if settings.iobroker_user and not settings.iobroker_token else None
     async with httpx.AsyncClient(timeout=15,headers=headers,auth=auth,follow_redirects=False) as client:
         if inventory is None:
-            async with client.stream('GET',settings.iobroker_url.rstrip('/')+'/objects',params={'type':'state'}) as response:
-                response.raise_for_status();buffer=bytearray()
-                async for chunk in response.aiter_bytes():
-                    buffer.extend(chunk)
-                    if len(buffer)>32*1024*1024:raise ValueError('ioBroker inventory too large')
-            objects=json.loads(buffer);inventory=[]
-            if not isinstance(objects,dict) or 'error' in objects:raise ValueError('Invalid ioBroker inventory')
-            for state_id,obj in objects.items():
-                if not isinstance(obj,dict) or obj.get('type')!='state':continue
-                common=obj.get('common') or {}
-                if common.get('read') is False or re.search(r'password|passwd|secret|token|api.?key',state_id,re.I):continue
-                name=common.get('name') or state_id
-                if isinstance(name,dict):name=name.get('de') or name.get('en') or state_id
-                # Native adapter configuration never enters the model context or the local inventory.
-                inventory.append({'id':state_id,'name':str(name),'role':common.get('role',''),'unit':common.get('unit','')})
+            inventory=await state_inventory(client,settings)
         scored=[]
         for obj in inventory:
             haystack=(obj['id']+' '+obj['name']).casefold()

@@ -21,6 +21,7 @@ from .worker import Worker
 from .intelligence import generate, ProviderLimited, provider_is_limited
 from .planning import plan_question
 from .smarthome import scope
+from .lighting import is_current_lighting_question, light_answer
 from .retrieval import local_answer, maintenance_answer, evidence_recency, question_sender, is_purchase_question, is_account_question
 import json
 import re
@@ -200,6 +201,18 @@ def create_app(settings=None):
         previous=store.conversation(value.conversation_id) if value.conversation_id else None
         if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
         history=[{'role':message['role'],'text':message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
+        if is_current_lighting_question(value.message):
+            lighting=await worker.lighting_context(value.message)
+            sources=[]
+            if lighting.get('fresh'):
+                rows=[state['name']+' · '+('an' if state['on'] is True else 'aus' if state['on'] is False else 'Zustand unklar') for state in lighting['lights']]
+                sources=[{'id':'iobroker:lighting','source':'smart_home','title':'Direkt abgefragte Lichtzustände','excerpt':'\n'.join(rows) or 'Keine eindeutig zugeordneten Lichtaktoren gefunden.','document_date':lighting['checked'],'url':None}]
+            diagnostics=list(lighting.get('diagnostics',[]))
+            diagnostics.append('Direkte, rein lesende ioBroker-Abfrage. Angezeigt wird der zuletzt vom Gerät gemeldete Zustand; kein KI-Anbieter wurde für diese Frage aufgerufen.')
+            if lighting.get('truncated'):diagnostics.append('Die Abfrage wurde auf 300 Licht-Schaltpunkte begrenzt; weitere Lichtpunkte können fehlen.')
+            result={'answer':light_answer(value.message,lighting),'sources':sources,'diagnostics':diagnostics,'external_used':False,'answer_mode':'live' if lighting.get('fresh') else 'local','query_kind':'lighting','ai_issue':None,'query_planned_by_ai':False}
+            result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result)
+            return result
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
         interactive=bool(value.share_external and chat_enabled)
         chat_settings=s.model_copy(update={'allow_external_llm':bool(chat_enabled)})
@@ -286,6 +299,8 @@ def create_app(settings=None):
             if configured and (state.get('error') or not state):
                 unavailable.append(label)
         local=local_answer(value.message,hits,unavailable)
+        if provider_issue and 'KI-Auswertung einschalten' in local:
+            local='Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.'
         if provider_issue and not hits and not smart_context:
             local='Das kann ich gerade nicht zuverlässig aus deinen Daten beantworten. Meine KI-Auswertung ist vorübergehend nicht verfügbar.'
         diagnostics=[provider_issue] if provider_issue else []
@@ -308,7 +323,7 @@ def create_app(settings=None):
         if coverage['mail_archive_started'] and not coverage['mail_archive_complete']:
             diagnostics.append('Das vollständige E-Mail-Archiv wird noch lokal eingelesen. Aktuell fehlen '+str(coverage['mail_archive_remaining'])+' Nachrichten im Index.')
         if smart_context and not hits:
-            local='Passende Smart-Home-Zustände sind als Kontext vorhanden. Aktiviere die externe KI für eine formulierte Auswertung deiner Frage.'
+            local='Die Smart-Home-Daten sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.' if provider_issue else 'Passende Smart-Home-Zustände sind als Kontext vorhanden. Aktiviere die Chat-KI in den Einstellungen für eine formulierte Auswertung.'
         sources=[]
         for hit in hits:
             source={'id':hit['item_id'],'title':hit['title'],'source':hit.get('source','local'),'excerpt':hit['body'],'document_date':hit.get('document_date'),'url':None}
