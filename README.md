@@ -60,7 +60,7 @@ ssh -N -L 8010:127.0.0.1:8010 root@LXC-IP
 ssh -N -L 8012:127.0.0.1:8010 root@LXC-IP
 ```
 
-Dann `http://127.0.0.1:8012` öffnen. Über den Loopback-Zugang meldet sich die Oberfläche automatisch an. Der interne API-Token wird vom Installer zufällig erzeugt; du musst ihn nicht abschreiben oder bei jedem Start eingeben.
+Dann `http://127.0.0.1:8012` öffnen. Beim ersten lokalen Zugriff lässt sich ein Administratorkonto mit E-Mail-Adresse und Passwort einrichten. Danach erfolgt die Anmeldung mit diesem Konto. Der interne API-Token wird vom Installer zufällig erzeugt und nicht für die Browseranmeldung eingegeben.
 
 ### Direkt mit eigener HTTPS-Adresse installieren
 
@@ -128,13 +128,41 @@ Wenn du zunächst ohne Domain installiert hast, später umstellen:
 aibutler update --domain ai.example.com --proxy-ip 192.168.1.10
 ```
 
-Danach im LXC einen Kopplungscode erstellen:
+### Anmeldung mit E-Mail-Adresse und Passwort
+
+Kopplungscodes und die automatische Loopback-Anmeldung wurden durch Benutzerkonten ersetzt. Nach einem Update sind alte Kopplungssitzungen ungültig; deine Verbindungen und Archive bleiben erhalten.
+
+Im LXC einmal das erste Konto anlegen:
 
 ```bash
-aibutler pair
+aibutler user add deine@email.de
 ```
 
-Die Ausgabe enthält die HTTPS-Adresse und einen **einmaligen, zehnstelligen Code**, keinen API-Key. Auf dem Handy die Adresse öffnen und den Code eingeben. Er gilt zehn Minuten, ist einmal verwendbar und wird nach zehn Fehlversuchen gesperrt. Nach erfolgreicher Kopplung bleibt die Anmeldung für 30 Tage gespeichert. Einen abgelaufenen Code mit `aibutler pair` neu erzeugen.
+Die E-Mail-Adresse durch deine gewünschte Anmeldeadresse ersetzen. Das Terminal fragt das Passwort verdeckt zweimal ab; mindestens zwölf Zeichen verwenden. Das Passwort gehört **nicht** in den Befehl, die Shell-History oder einen Chat. Das erste Konto ist automatisch Administrator. Alternativ kann die Ersteinrichtung über die lokale Oberfläche bzw. den SSH-Tunnel erfolgen; über die öffentliche Domain gibt es keine offene Selbstregistrierung.
+
+Danach die HTTPS-Adresse auf Handy oder PC öffnen und mit E-Mail-Adresse und Passwort anmelden. **„Angemeldet bleiben“** speichert eine widerrufbare Sitzung für 30 Tage; ohne Häkchen wird ein Browser-Sitzungscookie mit maximal zwölf Stunden serverseitiger Gültigkeit verwendet. Normale Updates behalten die Konten und Sitzungen bei. Die E-Mail-Adresse dient als Anmeldename; die App versendet keine Registrierungs- oder Passwort-Reset-E-Mails.
+
+Unter **Einstellungen → Benutzerkonten** können Administratoren weitere Konten anlegen und sperren. Mitglieder können die verbundenen Quellen gemeinsam nutzen und Fragen stellen. Nur Administratoren ändern Verbindungen, Projektkontext und Benutzerkonten. **Gesprächsverläufe sind je Konto getrennt.** Das erste Administratorkonto übernimmt die bisherigen, noch keinem Konto zugeordneten Gespräche. Es gibt keine getrennten Quellenbestände pro Person; wer Zugriff bekommt, kann Inhalte aus den gemeinsamen Quellen abfragen.
+
+Unter **Mein Konto** lassen sich Passwort und Anmeldung verwalten. Passwortänderungen und Kontosperren widerrufen bestehende Sitzungen; nach einer Passwortänderung bleibt nur die neu ausgestellte Sitzung des aktuellen Browsers bestehen. „Abmelden“ widerruft die aktuelle Sitzung serverseitig. Passwörter werden mit Argon2id gehasht und nicht im Klartext gespeichert; die internen Sitzungstokens sind nur als SHA-256-Digest gespeichert. Grundlage: [OWASP-Passwortspeicherung](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).
+
+Bei vergessenem Passwort im LXC:
+
+```bash
+aibutler user passwd deine@email.de
+```
+
+Weitere Konsolenbefehle:
+
+```bash
+aibutler user list
+aibutler user add weitere@email.de
+aibutler user add admin@email.de --admin
+aibutler user disable weitere@email.de
+aibutler user enable weitere@email.de
+```
+
+Der letzte aktive Administrator kann nicht gesperrt werden. Fehlgeschlagene Anmeldungen werden begrenzt; nach zehn Fehlversuchen je Adresse bzw. 30 je Verbindungs-IP innerhalb von 15 Minuten ist vorübergehend eine Pause nötig. Ein Passwort-Reset über die LXC-Konsole löst die adressbezogene Sperre auf. Der interne API-Key bleibt ein separater privilegierter Schlüssel für vertrauenswürdige technische Clients und gehört nicht in den Browser.
 
 **Als Webapp hinzufügen:**
 
@@ -208,7 +236,8 @@ Die Anwendung kann ihre SQLite-Struktur beim Start erweitern. Deshalb stellt ein
 aibutler status             # systemd-Status
 aibutler logs               # Live-Logs; Ctrl+C beendet nur die Loganzeige
 aibutler restart            # Dienst neu starten
-aibutler pair               # Neuen Kopplungscode erzeugen
+aibutler user list          # Benutzerkonten anzeigen
+aibutler user passwd EMAIL # Passwort zurücksetzen
 aibutler backup             # Konsistentes privates Backup, kurze Dienstpause
 aibutler backups            # Sicherungen auflisten
 aibutler rollback           # Sicherung vor dem letzten erfolgreichen Update
@@ -219,7 +248,7 @@ Backups enthalten **Zugangsdaten und private Inhalte im Klartext**. Außerhalb d
 
 Eine Sicherung umfasst SQLite, `.env`, weitere private Dateien sowie Installations-/Dienstkonfiguration und die Referenz auf das bisherige Release. Öffentliche Sprachmodell-Gewichte und Modell-Caches werden nicht in jedes Backup kopiert; sie bleiben bei Updates erhalten bzw. lassen sich neu laden. Für das Rollback muss das im Backup referenzierte Release noch unter `/opt/aibutler/releases/` vorhanden sein.
 
-Beim Restore wird der jüngere Datenstand **nicht gelöscht**, sondern nach `/var/lib/aibutler-before-restore-…` verschoben. Ältere Backups, Releases und solche Datenstände werden nicht automatisch entfernt. Speicherverbrauch prüfen:
+Beim Restore wird der jüngere Datenstand **nicht gelöscht**, sondern nach `/var/lib/aibutler-before-restore-…` verschoben. Aus Sicherheitsgründen werden beim Restore gespeicherte Benutzersitzungen verworfen; danach erneut anmelden. Ältere Backups, Releases und solche Datenstände werden nicht automatisch entfernt. Speicherverbrauch prüfen:
 
 ```bash
 du -sh /opt/aibutler/releases /var/lib/aibutler /var/backups/aibutler
@@ -254,7 +283,7 @@ Der Installer lädt **keine** persönlichen Entwicklungsdaten aus GitHub. Sie si
    aibutler status
    ```
 
-5. Domain-/Proxy-Einstellungen kommen weiterhin aus den Installationsoptionen im LXC; alte lokale `DATA_DIR`-/`PUBLIC_ORIGIN`-Werte werden vom systemd-Dienst überschrieben. Handy erneut über `aibutler pair` verbinden.
+5. Domain-/Proxy-Einstellungen kommen weiterhin aus den Installationsoptionen im LXC; alte lokale `DATA_DIR`-/`PUBLIC_ORIGIN`-Werte werden vom systemd-Dienst überschrieben. Mit dem übernommenen Konto anmelden; falls noch kein Konto angelegt war, einmal `aibutler user add DEINE-EMAIL` ausführen.
 6. Die privaten Transferdateien auf beiden Rechnern nach erfolgreicher Prüfung geschützt aufbewahren oder bewusst entfernen. Niemals in GitHub hochladen.
 
 Bereits vorhandene manuelle Installationen unter `/opt/aibutler` überschreibt der Installer nicht. Zuerst deren private Daten sichern, die manuelle Code-Installation an einen anderen Ort verschieben und dann den verwalteten Installer verwenden. Quellcode-Änderungen im verwalteten Release sind nicht als dauerhafte Konfiguration vorgesehen; dafür einen eigenen Git-Ref nutzen.
@@ -271,7 +300,7 @@ Bereits vorhandene manuelle Installationen unter `/opt/aibutler` überschreibt d
 | Domain noch nicht erreichbar | DNS/Zertifikat/Proxy fehlen; zuerst per SSH-Tunnel testen. Installer legt sie nicht automatisch an. |
 | HTTPS-Adresse liefert 403 | Domain muss exakt passen; Proxy-IP muss der direkten Gegenstelle entsprechen, Host und HTTPS-Schema müssen weitergegeben werden. |
 | HTTP-Aufruf per LXC-IP funktioniert nicht | Im Standardbetrieb ist nur Loopback erlaubt. Für LAN-Zugriff den HTTPS-Proxy einrichten; Backend-IP im Browser ersetzt die konfigurierte Domain nicht. |
-| Handy verlangt eine Anmeldung | `aibutler pair` im LXC ausführen und den zeitlich begrenzten Code eingeben. |
+| Handy verlangt eine Anmeldung | Mit E-Mail-Adresse und Passwort anmelden. Erstes Konto: `aibutler user add DEINE-EMAIL`. Passwort vergessen: `aibutler user passwd DEINE-EMAIL`. |
 | Mikrofon fehlt/blockiert | HTTPS und Browserberechtigung prüfen. Ohne Sprachinstallation mit `aibutler update --speech` nachrüsten. Lokale deutsche Stimme für Vorlesen installieren. |
 | KI antwortet lokal statt mit Modell | Chat-KI-Freigabe, Modell, Key und Anbieterlimits prüfen. HTTP 429 ist eine Begrenzung beim Anbieter. |
 | Wenige alte Mails sichtbar | Import läuft noch; Fortschritt in „Wissensquellen“ prüfen. Leserechte und Ordnerauswahl kontrollieren. |
@@ -299,7 +328,7 @@ Der Healthcheck bestätigt den Backend-Start, nicht die Erreichbarkeit deiner ex
 - Alle noch lesbaren Mailordner lassen sich rückwirkend indexieren. ntfy kann nur noch verfügbare Meldungen liefern. Frühere ioBroker-Zustände sind nur vorhanden, wenn bereits aufgezeichnet oder in Meldungen enthalten; direkte ioBroker-History-Adapter sind noch nicht angebunden.
 - Archivimport und Chat erzeugen keine Push-Meldungen. Automatische Benachrichtigungen sind konfigurierbar und werden gebündelt. Ein ausdrücklicher ntfy-Test sendet eine Testnachricht.
 - Kein autonomer Mailversand, keine Zahlungen, keine Schreibzugriffe der KI auf Smart-Home-Geräte. WhatsApp-/Facebook-Adapter und allgemeine Websuche sind noch nicht implementiert.
-- Einzelbenutzer-Anwendung: Eine gekoppelte Sitzung hat Zugriff auf die verbundenen privaten Quellen. Keine getrennten Benutzerrollen/Haushaltskonten. Nur einen Backend-Prozess betreiben, damit Worker nicht doppelt laufen.
+- Benutzerkonten mit Administrator-/Mitgliedsrollen: Quellen und Projektkontext werden gemeinsam genutzt; Gesprächsverläufe sind je Konto getrennt. Kein getrenntes Quellenarchiv pro Haushaltsperson. Nur einen Backend-Prozess betreiben, damit Worker nicht doppelt laufen.
 
 ## 11. Lokale Entwicklung ohne Linux-Installer
 
@@ -315,7 +344,7 @@ python -c 'import secrets; print(secrets.token_urlsafe(48))'
 uvicorn backend.main:app --host 127.0.0.1 --port 8010 --workers 1 --no-proxy-headers
 ```
 
-[http://127.0.0.1:8010](http://127.0.0.1:8010) öffnen. Der Browser benötigt keine manuelle Token-Eingabe. `.env`, `data/` und lokale Backups sind nicht Teil des Git-Repositories.
+[http://127.0.0.1:8010](http://127.0.0.1:8010) öffnen. Beim ersten lokalen Aufruf ein Konto einrichten, danach mit E-Mail-Adresse und Passwort anmelden. Der Browser benötigt keine Token-Eingabe. `.env`, `data/` und lokale Backups sind nicht Teil des Git-Repositories.
 
 Lokale Sprache optional nachrüsten:
 
@@ -341,7 +370,7 @@ backend/                  FastAPI, Worker, IMAP/Paperless/ntfy/ioBroker, lokaler
 frontend/                 HTML/Tailwind/JS-Webapp, PWA, Sprachbedienung
 deploy/aibutler.service    systemd-Dienst für verwaltete Releases
 deploy/control.sh          Verwaltungsbefehl aibutler
-deploy/maintenance.py      Konsistente Sicherungen, Restore, Kopplung
+deploy/maintenance.py      Konsistente Sicherungen, Restore, Benutzerverwaltung
 deploy/Caddyfile           Beispiel für eigenen HTTPS-Proxy
 scripts/setup_speech.py    Einmaliger Download lokaler Sprachmodell-Gewichte
 tests/                    Automatische API-/Recherche-/Installationsprüfungen
@@ -364,7 +393,7 @@ flowchart LR
   S --> A
 ```
 
-API-Zugriff verwendet eine gültige Sitzung oder `Authorization: Bearer <API_TOKEN>`. `/healthz`, statische Dateien und speziell abgesicherte Sitzungs-/Kopplungsrouten sind Ausnahmen. Wichtige APIs: `/api/chat`, `/api/conversations`, `/api/connections`, `/api/context`, `/api/sync`, `/api/status`, `/api/events` und `/api/speech/transcribe`. Schreibende Cookie-Anfragen müssen von derselben Origin kommen.
+API-Zugriff verwendet eine gültige Sitzung oder `Authorization: Bearer <API_TOKEN>`. `/healthz`, statische Dateien und speziell abgesicherte Anmelde-/Ersteinrichtungsrouten sind Ausnahmen. Wichtige APIs: `/api/chat`, `/api/conversations`, `/api/connections`, `/api/context`, `/api/sync`, `/api/status`, `/api/events` und `/api/speech/transcribe`. Schreibende Cookie-Anfragen müssen von derselben Origin kommen.
 
 Python-Umgebungen werden pro Release direkt an ihrem endgültigen Pfad erstellt: Laut [Python-venv-Dokumentation](https://docs.python.org/3/library/venv.html) sind sie wegen absoluter Interpreterpfade nicht beliebig verschiebbar. Die Dienstparameter folgen der [systemd-Dokumentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html).
 

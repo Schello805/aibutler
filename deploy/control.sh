@@ -12,7 +12,11 @@ AI Butler verwalten (als root oder mit sudo):
   aibutler status              Dienststatus
   aibutler logs                Letzte 100 Logzeilen und Live-Protokoll
   aibutler restart             Dienst neu starten
-  aibutler pair                Einmaligen Kopplungscode für die HTTPS-Webapp erzeugen
+  aibutler user add EMAIL [--admin]  Konto anlegen (erstes Konto ist Administrator)
+  aibutler user passwd EMAIL   Passwort zurücksetzen
+  aibutler user list           Benutzerkonten anzeigen
+  aibutler user enable EMAIL   Konto freigeben
+  aibutler user disable EMAIL  Konto sperren
   aibutler backup              Konsistentes Backup; Dienst wird kurz angehalten
   aibutler rollback [BACKUP]   Code UND Daten auf Backup-Stand zurücksetzen
   aibutler backups             Verfügbare Backups auflisten
@@ -32,7 +36,8 @@ case "$command" in
     status) systemctl --no-pager --full status aibutler.service ;;
     logs) journalctl -u aibutler.service -n 100 -f ;;
     restart) systemctl restart aibutler.service ;;
-    pair) "$PYTHON" "$HELPER" pair ;;
+    user) "$PYTHON" "$HELPER" user "$@" ;;
+    pair) printf 'Kopplung wurde durch Benutzerkonten ersetzt. Erstes Konto: aibutler user add EMAIL\n' >&2; exit 1 ;;
     backups) find /var/backups/aibutler -mindepth 1 -maxdepth 1 -type d -print | sort ;;
     backup|rollback)
         exec 9>/run/lock/aibutler-install.lock

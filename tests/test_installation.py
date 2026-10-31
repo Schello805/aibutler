@@ -125,15 +125,33 @@ def test_restore_rejects_unsafe_archive_before_extracting_anything(tmp_path,name
     assert list(destination.iterdir())==[]
 
 
-def test_pair_prints_only_one_time_code_not_api_token(tmp_path,monkeypatch,capsys):
-    setup_managed_tree(tmp_path,monkeypatch)
-    requests=[]
-    def response(request,timeout):
-        requests.append(request)
-        return io.BytesIO(json.dumps({'url':'https://ai.example.com','code':'1234567890'}).encode())
-    monkeypatch.setattr(maintenance,'urlopen',response)
-    maintenance.pair()
+def test_cli_account_creation_never_prints_password(tmp_path,monkeypatch,capsys):
+    import getpass
+    from contextlib import nullcontext
+    from backend.accounts import Accounts
+    from backend.store import Store
+    _,data,_,_=setup_managed_tree(tmp_path,monkeypatch)
+    monkeypatch.setattr(getpass,'getpass',lambda *args:'example-private-passphrase')
+    monkeypatch.setattr(maintenance,'service_identity',nullcontext)
+    maintenance.user_command(['add','owner@example.org'])
     text=capsys.readouterr().out
-    assert '1234567890' in text and 'example-private-key' not in text
-    assert requests[0].full_url=='http://127.0.0.1:8010/api/session/pairing'
-    assert requests[0].get_header('Authorization')=='Bearer example-private-key'
+    assert 'example-private-passphrase' not in text and 'example-private-key' not in text
+    accounts=Accounts(Store(data))
+    assert accounts.list()[0]['role']=='admin'
+    assert accounts.authenticate('owner@example.org','example-private-passphrase','cli')
+
+def test_restore_does_not_resurrect_previously_revoked_sessions(tmp_path,monkeypatch):
+    import pwd
+    from backend.accounts import Accounts
+    from backend.store import Store
+    monkeypatch.setattr(pwd,'getpwnam',lambda _:SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid()))
+    _,data,_,_=setup_managed_tree(tmp_path,monkeypatch)
+    accounts=Accounts(Store(data))
+    user=accounts.create('owner@example.org','a-long-example-passphrase')
+    token,_=accounts.new_session(user['id'])
+    target=maintenance.backup()
+    accounts.revoke(token)
+    maintenance.restore(target)
+    restored=Accounts(Store(data))
+    assert restored.session(token) is None
+    assert restored.authenticate(user['email'],'a-long-example-passphrase','test')

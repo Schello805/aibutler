@@ -290,7 +290,7 @@ if [[ -n $BACKUP ]]; then ln -sfn "$BACKUP" "$APP_ROOT/latest-update-backup"; fi
 SUCCESS=true
 log "Fertig. Version: ${SHA:0:12} · Dienst: aibutler · Port: $PORT"
 if [[ -n $DOMAIN ]]; then
-    printf '\nHTTPS-Adresse: %s\nProxy: %s → http://LXC-IP:%s\nDNS, Zertifikat und Proxy separat einrichten. Danach: aibutler pair\n' "$DOMAIN" "$PROXY_IP" "$PORT"
+    printf '\nHTTPS-Adresse: %s\nProxy: %s → http://LXC-IP:%s\nDNS, Zertifikat und Proxy separat einrichten. Anmeldung mit deinem Benutzerkonto. Erstes Konto anlegen: aibutler user add DEINE-EMAIL\n' "$DOMAIN" "$PROXY_IP" "$PORT"
 else
     printf '\nNur lokal erreichbar. Auf deinem PC einen SSH-Tunnel öffnen:\n  ssh -N -L %s:127.0.0.1:%s root@LXC-IP\nDann im PC-Browser: http://127.0.0.1:%s\n' "$PORT" "$PORT" "$PORT"
 fi

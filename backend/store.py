@@ -28,6 +28,8 @@ class Store:
             INSERT OR IGNORE INTO context VALUES(1, '{"projects":[]}');
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, item_id TEXT, title TEXT, reason TEXT, sent INTEGER DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
             ''')
+            if 'owner_id' not in {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}:
+                db.execute('ALTER TABLE conversations ADD COLUMN owner_id TEXT')
             if db.execute("INSERT OR IGNORE INTO notification_state VALUES('quiet-policy-v1','1')").rowcount:
                 # Preserve all findings, but retire the old noisy notification backlog once.
                 db.execute('UPDATE events SET sent=2 WHERE sent=0')
@@ -227,21 +229,22 @@ class Store:
         topics=[state for state in overview['states'] if state['key'].startswith('ntfy:')]
         return {'indexed':overview['indexed'],'mail_archive_started':bool(archives),'mail_archive_complete':bool(archives) and all(state.get('complete',False) for state in archives),'mail_archive_remaining':sum(state.get('remaining',0) for state in archives),'ntfy_topics_synced':sum(not state.get('error') for state in topics),'ntfy_topics_failed':sum(bool(state.get('error')) for state in topics),'ntfy_cache_replay_ok':bool(topics) and all(not state.get('error') and not state.get('truncated') for state in topics),'ntfy_retention':'Nur zum ersten Abruf noch auf dem Server gespeicherte Meldungen und anschließend lokal archivierte Ereignisse; frühere gelöschte Daten fehlen.','smart_history':'Lokale Zustandsänderungen erst seit Einrichtung erfasst; aktuelle Zustände sind keine vollständige Historie.'}
 
-    def conversations(self):
+    def conversations(self,owner_id=None):
         with self.connect() as db:
-            return [dict(row) for row in db.execute('SELECT id,title,updated FROM conversations ORDER BY updated DESC,rowid DESC LIMIT 50')]
+            return [dict(row) for row in db.execute('SELECT id,title,updated FROM conversations'+(' WHERE owner_id=?' if owner_id else '')+' ORDER BY updated DESC,rowid DESC LIMIT 50',(owner_id,) if owner_id else ())]
 
-    def conversation(self,conversation_id):
+    def conversation(self,conversation_id,owner_id=None):
         with self.connect() as db:
-            row=db.execute('SELECT id,title,updated FROM conversations WHERE id=?',(conversation_id,)).fetchone()
+            row=db.execute('SELECT id,title,updated FROM conversations WHERE id=?'+(' AND owner_id=?' if owner_id else ''),(conversation_id,owner_id) if owner_id else (conversation_id,)).fetchone()
             if not row:return None
             messages=[{**dict(message),'payload':json.loads(message['payload'])} for message in db.execute('SELECT role,text,payload,created FROM (SELECT * FROM conversation_messages WHERE conversation_id=? ORDER BY id DESC LIMIT 100) ORDER BY id',(conversation_id,))]
             return {**dict(row),'messages':messages}
 
-    def save_exchange(self,conversation_id,question,result):
+    def save_exchange(self,conversation_id,question,result,owner_id=None):
         conversation_id=conversation_id or uuid.uuid4().hex
         with self.connect() as db:
-            db.execute('INSERT OR IGNORE INTO conversations(id,title) VALUES(?,?)',(conversation_id,question[:80]))
+            db.execute('INSERT OR IGNORE INTO conversations(id,title,owner_id) VALUES(?,?,?)',(conversation_id,question[:80],owner_id))
+            if owner_id and not db.execute('SELECT 1 FROM conversations WHERE id=? AND owner_id=?',(conversation_id,owner_id)).fetchone():raise ValueError('Gespräch nicht zugänglich')
             db.execute('INSERT INTO conversation_messages(conversation_id,role,text,payload) VALUES(?,?,?,?)',(conversation_id,'user',question,'{}'))
             db.execute('INSERT INTO conversation_messages(conversation_id,role,text,payload) VALUES(?,?,?,?)',(conversation_id,'assistant',result['answer'],json.dumps(result,ensure_ascii=False)))
             db.execute('UPDATE conversations SET updated=CURRENT_TIMESTAMP WHERE id=?',(conversation_id,))

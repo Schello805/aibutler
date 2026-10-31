@@ -5,18 +5,18 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager, suppress
 import secrets
-import hashlib
-import hmac
 import time
 from typing import Annotated
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pathlib import Path
 from pydantic import BaseModel, Field
 from .config import Settings
 from .store import Store
+from .accounts import Accounts
 from .worker import Worker
 from .intelligence import generate, ProviderLimited, provider_is_limited
 from .planning import plan_question
@@ -45,6 +45,8 @@ def create_app(settings=None):
     s = settings or Settings(_env_file=os.environ.get('BUTLER_ENV_FILE','.env'))
     store = Store(s.data_dir)
     worker = Worker(s,store)
+    accounts=Accounts(store)
+    app_password_slots=asyncio.Semaphore(2)
     @asynccontextmanager
     async def lifespan(app):
         if not s.api_token:
@@ -58,6 +60,9 @@ def create_app(settings=None):
                 with suppress(asyncio.CancelledError):
                     await running
     app = FastAPI(title='Lokaler KI-Butler', lifespan=lifespan)
+    @app.exception_handler(RequestValidationError)
+    async def private_validation_error(request,exception):
+        return JSONResponse({'detail':[{key:error[key] for key in ('loc','msg','type') if key in error} for error in exception.errors()]},status_code=422)
     from urllib.parse import urlsplit
     public=urlsplit(s.public_origin)
     if s.public_origin and (public.scheme!='https' or not public.hostname or public.username or public.password or public.path not in ('','/') or public.query or public.fragment):
@@ -76,88 +81,125 @@ def create_app(settings=None):
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Permissions-Policy']='microphone=(self)'
         return response
-    pairing={'hash':'','expires':0,'attempts':0}
-    session_lifetime = 30 * 24 * 60 * 60
-    cookie_name = 'butler_session'
-    def session_signature(expiry):
-        return hmac.new(s.api_token.encode(), ('butler-session-v1:'+expiry).encode(),hashlib.sha256).hexdigest()
+    cookie_name='butler_session'
+    app.state.accounts=accounts
 
-    async def auth(request: Request, authorization: str = Header(default='')):
-        if s.api_token and authorization and secrets.compare_digest(authorization, 'Bearer '+s.api_token):
-            return
-        cookie = request.cookies.get(cookie_name,'')
-        try:
-            expiry, signature = cookie.split('.',1)
-            valid = bool(s.api_token) and time.time() < int(expiry) <= time.time()+session_lifetime+60 and hmac.compare_digest(signature,session_signature(expiry))
-        except (ValueError,TypeError):
-            valid = False
-        if not valid:
-            raise HTTPException(401,'Bitte einmal mit dem lokalen API-Token anmelden')
-        if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('origin') != str(request.base_url).rstrip('/'):
+    def local_browser(request):
+        try:return request.url.hostname in ('localhost','127.0.0.1') and ipaddress.ip_address(request.client.host).is_loopback
+        except (ValueError,AttributeError):return False
+
+    def same_origin(request):
+        if request.headers.get('origin')!=str(request.base_url).rstrip('/') or request.headers.get('sec-fetch-site','same-origin')!='same-origin':
             raise HTTPException(403,'Anfrage stammt nicht von dieser Butler-Oberfläche')
+        if request.url.scheme!='https' and not local_browser(request):
+            raise HTTPException(403,'Die Anmeldung erfordert HTTPS')
+
+    async def auth(request:Request,authorization:str=Header(default='')):
+        request.state.user=None
+        if s.api_token and authorization and secrets.compare_digest(authorization,'Bearer '+s.api_token):return
+        user=accounts.session(request.cookies.get(cookie_name,''))
+        if not user:raise HTTPException(401,'Bitte mit E-Mail-Adresse und Passwort anmelden')
+        request.state.user=user
+        if request.method not in ('GET','HEAD','OPTIONS'):same_origin(request)
+
+    async def admin_auth(request:Request,authorization:str=Header(default='')):
+        await auth(request,authorization)
+        if request.state.user and request.state.user['role']!='admin':raise HTTPException(403,'Nur für Administratoren')
+
+    def user_owner(request):
+        return request.state.user['id'] if request.state.user else None
+
+    def session_response(request,user,remember=True):
+        token,lifetime=accounts.new_session(user['id'],remember)
+        response=JSONResponse({'authenticated':True,'user':user})
+        response.set_cookie(cookie_name,token,max_age=lifetime if remember else None,httponly=True,samesite='strict',secure=request.url.scheme=='https',path='/api')
+        return response
+
+    class Credentials(BaseModel):
+        email:str=Field(min_length=3,max_length=254)
+        password:str=Field(min_length=1,max_length=1024)
+        remember:bool=True
+
+    class NewAccount(BaseModel):
+        email:str=Field(min_length=3,max_length=254)
+        password:str=Field(min_length=12,max_length=1024)
+        role:Annotated[str,Field(pattern=r'^(admin|member)$')]='member'
+
+    class PasswordChange(BaseModel):
+        current_password:str=Field(min_length=1,max_length=1024)
+        new_password:str=Field(min_length=12,max_length=1024)
+
+    class AccountState(BaseModel):
+        active:bool
+
+    @app.get('/api/auth/config')
+    async def auth_config(request:Request):
+        return {'configured':accounts.count()>0,'bootstrap_local':local_browser(request)}
+
+    @app.post('/api/auth/bootstrap')
+    async def bootstrap(value:NewAccount,request:Request):
+        same_origin(request)
+        if not local_browser(request):raise HTTPException(403,'Erstes Konto im LXC mit aibutler user add EMAIL anlegen')
+        if accounts.count():raise HTTPException(409,'Die Ersteinrichtung ist bereits abgeschlossen.')
+        if app_password_slots.locked():raise HTTPException(429,'Bitte kurz warten')
+        async with app_password_slots:
+            try:user=await asyncio.to_thread(accounts.create,value.email,value.password,'admin',True)
+            except ValueError as exc:raise HTTPException(409,str(exc))
+        return session_response(request,user)
 
     @app.post('/api/session')
-    async def login(request: Request, authorization: str = Header(default='')):
-        if not s.api_token or not secrets.compare_digest(authorization,'Bearer '+s.api_token):
-            raise HTTPException(401,'Ungültiger API-Token')
-        response = JSONResponse({'authenticated':True})
-        expiry = str(int(time.time())+session_lifetime)
-        response.set_cookie(cookie_name, expiry+'.'+session_signature(expiry),max_age=session_lifetime,httponly=True,samesite='strict',secure=request.url.scheme=='https',path='/api')
-        response.headers['Cache-Control']='no-store'
-        return response
-
-    @app.post('/api/session/local')
-    async def local_login(request: Request):
-        # A local desktop app: only its own origin on a loopback connection may bootstrap.
-        # No proxy headers are trusted here; bind Uvicorn to 127.0.0.1.
-        try:
-            local=ipaddress.ip_address(request.client.host).is_loopback
-        except (ValueError,AttributeError):
-            local=False
-        expected=str(request.base_url).rstrip('/')
-        if (not local or request.url.hostname not in ('localhost','127.0.0.1')
-            or request.headers.get('origin') != expected
-            or request.headers.get('sec-fetch-site','same-origin') != 'same-origin'):
-            raise HTTPException(403,'Automatische Verbindung ist nur von der lokalen Butler-Oberfläche möglich')
-        return await login(request, 'Bearer '+s.api_token)
-
-    @app.post('/api/session/pairing',dependencies=[Depends(auth)])
-    async def create_pairing(request:Request):
-        if request.url.hostname not in ('localhost','127.0.0.1') or not ipaddress.ip_address(request.client.host).is_loopback:
-            raise HTTPException(403,'Kopplung nur am lokalen Rechner erstellen')
-        if not s.public_origin:
-            raise HTTPException(409,'Zuerst eine HTTPS-Adresse als PUBLIC_ORIGIN einrichten')
-        code=''.join(secrets.choice('0123456789') for _ in range(10))
-        pairing.update(hash=hashlib.sha256(code.encode()).hexdigest(),expires=time.time()+600,attempts=0)
-        return {'code':code,'expires_in':600,'url':s.public_origin}
-
-    class Pairing(BaseModel):
-        code:str=Field(min_length=10,max_length=10,pattern=r'^\d{10}$')
-
-    @app.post('/api/session/pair')
-    async def pair(value:Pairing,request:Request):
-        if not s.public_origin or str(request.base_url).rstrip('/')!=s.public_origin.rstrip('/') or request.headers.get('origin')!=s.public_origin.rstrip('/') or request.url.scheme!='https':
-            raise HTTPException(403,'Kopplung nur über die konfigurierte HTTPS-Adresse')
-        if pairing['expires']<time.time() or pairing['attempts']>=10:
-            raise HTTPException(403,'Kopplung abgelaufen. Am Rechner neu erstellen.')
-        pairing['attempts']+=1
-        if not hmac.compare_digest(hashlib.sha256(value.code.encode()).hexdigest(),pairing['hash']):
-            raise HTTPException(403,'Kopplungscode ungültig')
-        pairing.update(hash='',expires=0)
-        return await login(request,'Bearer '+s.api_token)
+    async def login(value:Credentials,request:Request):
+        same_origin(request)
+        if app_password_slots.locked():raise HTTPException(429,'Zu viele gleichzeitige Anmeldungen. Bitte kurz warten.')
+        async with app_password_slots:
+            try:user=await asyncio.to_thread(accounts.authenticate,value.email,value.password,request.client.host)
+            except ValueError as exc:raise HTTPException(429 if '15 Minuten' in str(exc) else 422,str(exc))
+        if not user:raise HTTPException(401,'E-Mail-Adresse oder Passwort ist falsch')
+        return session_response(request,user,value.remember)
 
     @app.get('/api/session',dependencies=[Depends(auth)])
-    async def session_status():
-        return {'authenticated':True}
+    async def session_status(request:Request):
+        return {'authenticated':True,'user':request.state.user}
 
     @app.delete('/api/session',dependencies=[Depends(auth)])
-    async def logout():
+    async def logout(request:Request):
+        accounts.revoke(request.cookies.get(cookie_name,''))
         response=JSONResponse({'authenticated':False})
-        response.delete_cookie(cookie_name,path='/api',httponly=True,samesite='strict')
+        response.delete_cookie(cookie_name,path='/api',httponly=True,samesite='strict',secure=request.url.scheme=='https')
         return response
 
+    @app.post('/api/account/password',dependencies=[Depends(auth)])
+    async def change_password(value:PasswordChange,request:Request):
+        user=request.state.user
+        if not user:raise HTTPException(403,'Mit dem Benutzerkonto anmelden')
+        if app_password_slots.locked():raise HTTPException(429,'Bitte kurz warten')
+        async with app_password_slots:
+            try:
+                verified=await asyncio.to_thread(accounts.authenticate,user['email'],value.current_password,request.client.host)
+                if not verified:raise HTTPException(401,'Aktuelles Passwort ist falsch')
+                await asyncio.to_thread(accounts.set_password,user['id'],value.new_password)
+            except ValueError as exc:raise HTTPException(429 if '15 Minuten' in str(exc) else 422,str(exc))
+        return session_response(request,user)
+
+    @app.get('/api/accounts',dependencies=[Depends(admin_auth)])
+    async def list_accounts():return accounts.list()
+
+    @app.post('/api/accounts',dependencies=[Depends(admin_auth)])
+    async def create_account(value:NewAccount):
+        if app_password_slots.locked():raise HTTPException(429,'Bitte kurz warten')
+        async with app_password_slots:
+            try:return await asyncio.to_thread(accounts.create,value.email,value.password,value.role)
+            except ValueError as exc:raise HTTPException(409,str(exc))
+
+    @app.patch('/api/accounts/{user_id}',dependencies=[Depends(admin_auth)])
+    async def account_state(user_id:str,value:AccountState,request:Request):
+        if request.state.user and request.state.user['id']==user_id and not value.active:raise HTTPException(409,'Das eigene Konto kann hier nicht gesperrt werden')
+        try:accounts.set_active(user_id,value.active)
+        except ValueError as exc:raise HTTPException(409,str(exc))
+        return accounts.by_id(user_id)
+
     from .connections import connection_router
-    app.include_router(connection_router(s,worker,auth,env_path=Path(os.environ.get('BUTLER_ENV_FILE','.env'))))
+    app.include_router(connection_router(s,worker,admin_auth,env_path=Path(os.environ.get('BUTLER_ENV_FILE','.env'))))
     protected = [Depends(auth)]
     @app.get('/healthz')
     async def health():
@@ -165,7 +207,7 @@ def create_app(settings=None):
 
     @app.get('/api/status',dependencies=protected)
     async def status():
-        return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s)}
+        return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url)}}
     @app.get('/api/sync',dependencies=protected)
     async def sync_status():
         return store.sync_overview()
@@ -173,32 +215,33 @@ def create_app(settings=None):
     @app.get('/api/context',dependencies=protected)
     async def context():
         return store.context()
-    @app.put('/api/context',dependencies=protected)
+    @app.put('/api/context',dependencies=[Depends(admin_auth)])
     async def update_context(value: Context):
         store.save_context(value.model_dump())
         return value
     @app.get('/api/events',dependencies=protected)
     async def events():
         return store.events()
-    @app.post('/api/scan',dependencies=protected)
+    @app.post('/api/scan',dependencies=[Depends(admin_auth)])
     async def scan():
         if worker.lock.locked():
             raise HTTPException(409,'Prüfung läuft bereits')
         await worker.tick()
         return worker.status
     @app.get('/api/conversations',dependencies=protected)
-    async def conversations():
-        return store.conversations()
+    async def conversations(request:Request):
+        return store.conversations(user_owner(request))
 
     @app.get('/api/conversations/{conversation_id}',dependencies=protected)
-    async def conversation(conversation_id:str):
-        result=store.conversation(conversation_id)
+    async def conversation(conversation_id:str,request:Request):
+        result=store.conversation(conversation_id,user_owner(request))
         if result is None:raise HTTPException(404,'Gespräch nicht gefunden')
         return result
 
     @app.post('/api/chat',dependencies=protected)
-    async def chat(value: Chat):
-        previous=store.conversation(value.conversation_id) if value.conversation_id else None
+    async def chat(value: Chat,request:Request):
+        owner_id=user_owner(request)
+        previous=store.conversation(value.conversation_id,owner_id) if value.conversation_id else None
         if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
         history=[{'role':message['role'],'text':message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
         if is_current_lighting_question(value.message):
@@ -211,7 +254,7 @@ def create_app(settings=None):
             diagnostics.append('Direkte, rein lesende ioBroker-Abfrage. Angezeigt wird der zuletzt vom Gerät gemeldete Zustand; kein KI-Anbieter wurde für diese Frage aufgerufen.')
             if lighting.get('truncated'):diagnostics.append('Die Abfrage wurde auf 300 Licht-Schaltpunkte begrenzt; weitere Lichtpunkte können fehlen.')
             result={'answer':light_answer(value.message,lighting),'sources':sources,'diagnostics':diagnostics,'external_used':False,'answer_mode':'live' if lighting.get('fresh') else 'local','query_kind':'lighting','ai_issue':None,'query_planned_by_ai':False}
-            result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result)
+            result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)
             return result
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
         interactive=bool(value.share_external and chat_enabled)
@@ -336,7 +379,7 @@ def create_app(settings=None):
         if not answer:
             answer=local
         result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':plan is not None}
-        result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result)
+        result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)
         return result
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])

@@ -4,11 +4,11 @@ import os
 import shutil
 import sys
 import tarfile
+import sqlite3
+from contextlib import contextmanager
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 ROOT = Path('/opt/aibutler')
 DATA = Path('/var/lib/aibutler')
@@ -99,6 +99,10 @@ def restore(target):
         extract_private_data(target / 'data.tar.gz', temporary)
         if not (temporary / 'config/.env').is_file():
             raise ValueError('Zugangsdaten-Datei fehlt im Backup')
+        database=temporary/'butler.sqlite3'
+        if database.is_file():
+            with sqlite3.connect(database) as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_sessions'").fetchone():db.execute('DELETE FROM user_sessions')
         displaced = DATA.with_name('aibutler-before-restore-' + stamp())
         if DATA.exists():
             DATA.rename(displaced)  # Preserve newer state for manual recovery, never delete it.
@@ -133,26 +137,52 @@ def restore(target):
             shutil.rmtree(temporary)
 
 
-def pair():
-    from dotenv import dotenv_values
-    config = json.loads((CONFIG / 'install.json').read_text())
-    if not config.get('domain'):
-        raise ValueError('Zuerst HTTPS konfigurieren: aibutler update --domain HOST --proxy-ip IP')
-    token = dotenv_values(DATA / 'config/.env').get('API_TOKEN')
-    if not token:
-        raise ValueError('Interner Sitzungsschlüssel fehlt')
-    port = int(config['port'])
-    if not 1 <= port <= 65535:raise ValueError('Ungültiger Backend-Port')
-    base = f"http://127.0.0.1:{port}"
-    request = Request(base + '/api/session/pairing', method='POST', data=b'', headers={'Authorization': 'Bearer ' + token, 'Origin': base})
+@contextmanager
+def service_identity():
+    """Create SQLite journals as the service user, never as root."""
+    if os.geteuid()!=0:
+        yield
+        return
+    import pwd
+    user=pwd.getpwnam('aibutler');group=os.getegid();groups=os.getgroups()
     try:
-        with urlopen(request, timeout=15) as response:
-            result = json.load(response)
-    except (HTTPError, URLError):
-        raise ValueError('Kopplung nicht verfügbar. Dienststatus und HTTPS-Konfiguration prüfen.') from None
-    print('Auf dem Handy öffnen:', result['url'])
-    print('Einmaliger Kopplungscode:', result['code'])
-    print('10 Minuten gültig. Danach bleibt die Sitzung 30 Tage gespeichert.')
+        os.setgroups([user.pw_gid]);os.setegid(user.pw_gid);os.seteuid(user.pw_uid)
+        yield
+    finally:
+        os.seteuid(0);os.setegid(group);os.setgroups(groups)
+
+
+def user_command(arguments):
+    import getpass
+    sys.path.insert(0,str(ROOT/'current'))
+    from backend.store import Store
+    from backend.accounts import Accounts,normalize_email
+    if not arguments:raise ValueError('Befehl: aibutler user add|passwd|list|enable|disable [EMAIL]')
+    action=arguments[0]
+    if action not in ('add','passwd','list','enable','disable'):raise ValueError('Unbekannter Benutzerbefehl')
+    if action!='list' and len(arguments)<2:raise ValueError('E-Mail-Adresse fehlt')
+    if (action=='list' and len(arguments)!=1) or (action=='add' and arguments[2:] not in ([],['--admin'])) or (action not in ('list','add') and len(arguments)!=2):raise ValueError('Ungültige Optionen. Passwörter werden ausschließlich verdeckt abgefragt.')
+    email=normalize_email(arguments[1]) if action!='list' else None
+    password=None
+    if action in ('add','passwd'):
+        password=getpass.getpass('Passwort (mindestens 12 Zeichen): ')
+        if password!=getpass.getpass('Passwort wiederholen: '):raise ValueError('Die Passwörter stimmen nicht überein')
+    with service_identity():
+        accounts=Accounts(Store(DATA))
+        if action=='list':
+            for user in accounts.list():print(user['email'],user['role'],'aktiv' if user['active'] else 'gesperrt')
+        elif action=='add':
+            accounts.create(email,password,'admin' if '--admin' in arguments[2:] else 'member')
+            print('Benutzerkonto gespeichert. Anmeldung mit E-Mail-Adresse und Passwort.')
+        else:
+            user=next((u for u in accounts.list() if u['email']==email),None)
+            if not user:raise ValueError('Konto nicht gefunden')
+            if action=='passwd':
+                accounts.set_password(user['id'],password)
+                print('Passwort gespeichert. Bisherige Sitzungen wurden abgemeldet.')
+            else:
+                accounts.set_active(user['id'],action=='enable')
+                print('Kontostatus aktualisiert.')
 
 
 def main():
@@ -166,8 +196,8 @@ def main():
         print(backup())
     elif command == 'restore' and len(sys.argv) == 3:
         restore(sys.argv[2])
-    elif command == 'pair':
-        pair()
+    elif command == 'user':
+        user_command(sys.argv[2:])
     elif command == 'port':
         print(json.loads((CONFIG / 'install.json').read_text())['port'])
     else:

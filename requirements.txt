@@ -3,3 +3,5 @@ uvicorn>=0.34,<1
 httpx>=0.28,<1
 pydantic-settings>=2.7,<3
 pytest>=8,<10
+
+argon2-cffi>=23.1,<30

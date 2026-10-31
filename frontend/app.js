@@ -3,6 +3,9 @@ let chatAiEnabled=false;
 let chatBusy=false;
 let conversationId=null;
 let contextDirty=false;
+let currentUser=null;
+let bootstrapAccount=false;
+const conversationKey=()=>'butler-conversation-'+(currentUser?.id||'anonymous');
 const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/svg','svg');el.classList.add('icon');el.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#i-'+name);el.append(use);return el;};
 const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
 function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true)); }
@@ -25,12 +28,12 @@ async function loadConversations(){
 }
 async function openConversation(id){
   if(chatBusy)return;
-  try{const conversation=await api('conversations/'+encodeURIComponent(id));voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();conversationId=id;localStorage.setItem('butler-conversation-id',id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
+  try{const conversation=await api('conversations/'+encodeURIComponent(id));voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
   catch(e){notice(e.message);}
 }
 function newConversation(){
   if(chatBusy)return;
-  voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();setMic(false);conversationId=null;localStorage.removeItem('butler-conversation-id');$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('question').focus();
+  voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();setMic(false);conversationId=null;localStorage.removeItem(conversationKey());$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('question').focus();
 }
 const sourceDefinitions=[
   {id:'imap',name:'E-Mails',icon:'mail',color:'blue',description:'Nachrichten, Bestellungen und Korrespondenz',unit:'Nachrichten im lokalen Index'},
@@ -42,7 +45,7 @@ function renderSources(status,sync){
   $('source-preview').replaceChildren();$('source-grid').replaceChildren();let configuredCount=0;
   for(const definition of sourceDefinitions){
     const id=definition.id,health=status.sources[id==='ntfy'?'ntfy_history':id]||{};
-    const configured=Boolean(savedConfig&&(id==='imap'?savedConfig.imap_host:id==='paperless'?savedConfig.paperless_url:id==='ntfy'?(savedConfig.ntfy_history_urls||savedConfig.ntfy_url):savedConfig.iobroker_url));
+    const configured=status.configured_sources?.[id]??Boolean(savedConfig&&(id==='imap'?savedConfig.imap_host:id==='paperless'?savedConfig.paperless_url:id==='ntfy'?(savedConfig.ntfy_history_urls||savedConfig.ntfy_url):savedConfig.iobroker_url));
     if(configured)configuredCount++;
     const count=sync.indexed[id]||0;
     const statusText=!configured?'Noch nicht verbunden':health.disabled?'Abruf pausiert':health.error||health.errors?'Abruf prüfen':Object.keys(health).length?'Verbunden':'Abruf wird vorbereitet';
@@ -64,7 +67,7 @@ function renderSources(status,sync){
 }
 async function api(path, options = {}) {
   const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
-  if (!response.ok) { const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : 'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
+  if (!response.ok) { if(response.status===401&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.'); const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : response.status===422?'Bitte prüfe deine Eingaben.':'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
   return response.json();
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
@@ -151,16 +154,50 @@ async function refresh() {
   const failures = Object.entries(status.sources).filter(([,v]) => v.error || v.errors);
   if (failures.length) notice('Quellenfehler: '+failures.map(([k])=>k).join(', ')+'. Zugangsdaten oder KI-Konfiguration prüfen.');
 }
-async function restoreLogin() {
-  try { await api('session'); } catch { await api('session/local',{method:'POST'}); }
-  notice('');
-  // Restore saved connections before any optional status or source requests.
-  await loadConnections();
-  const results=await Promise.allSettled([refresh(),api('context'),loadConversations()]);
-  const remembered=localStorage.getItem('butler-conversation-id');if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))await openConversation(remembered);
-  if(results[1].status==='fulfilled') {$('context-json').value=JSON.stringify(results[1].value);renderContext();}
-  if(results[0].status==='rejected') notice('Einstellungen geladen. Statusübersicht derzeit nicht verfügbar.');
+async function loadAccounts(){
+  if(currentUser?.role!=='admin')return;
+  const users=await api('accounts');$('account-list').replaceChildren();
+  for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
+async function showLogin(message=''){
+  connected=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
+  voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();
+  $('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
+  for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
+  $('messages').replaceChildren();$('events').replaceChildren();$('evidence-content').replaceChildren();$('account-list').replaceChildren();$('conversation-list').replaceChildren();$('mobile-conversation-list').replaceChildren();$('context-projects').replaceChildren();
+  for(const input of document.querySelectorAll('#app-shell input,#app-shell textarea'))if(input.type!=='checkbox')input.value='';
+  $('context-json').value='{"projects":[]}';$('source-grid').replaceChildren();$('source-preview').replaceChildren();$('account-identity').textContent='';
+  $('login-error').textContent=message;$('login-password').value='';$('login-password-confirm').value='';
+  try{const config=await api('auth/config');bootstrapAccount=!config.configured&&config.bootstrap_local;
+    $('login-title').textContent=bootstrapAccount?'Dein Konto einrichten.':'Schön, dass du da bist.';
+    $('login-description').textContent=!config.configured&&!config.bootstrap_local?'Noch kein Konto vorhanden. Im LXC einmal aibutler user add EMAIL ausführen.':bootstrapAccount?'Lege dein erstes Administratorkonto an. Bestehende Quellen und Gespräche bleiben erhalten.':'Mit deiner E-Mail-Adresse und deinem Passwort anmelden.';
+    $('password-confirm-label').hidden=!bootstrapAccount;$('login-password-confirm').required=bootstrapAccount;$('login-password').minLength=bootstrapAccount?12:1;$('login-password').autocomplete=bootstrapAccount?'new-password':'current-password';$('remember-label').hidden=bootstrapAccount;
+    $('login-submit').textContent=bootstrapAccount?'Konto erstellen ↗':'Anmelden ↗';$('login-submit').disabled=!config.configured&&!config.bootstrap_local;
+  }catch(e){$('login-error').textContent=e.message;}
+}
+async function restoreLogin(){
+  const session=await api('session');currentUser=session.user;
+  if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
+  document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
+  $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
+  connected=true;if(!$('messages').children.length)welcome();
+  if(currentUser.role==='admin')await loadConnections();
+  const results=await Promise.allSettled([refresh(),api('context'),loadConversations(),loadAccounts()]);
+  if(results[1].status==='fulfilled'){$('context-json').value=JSON.stringify(results[1].value);if(currentUser.role==='admin')renderContext();}
+  const remembered=localStorage.getItem(conversationKey());if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))await openConversation(remembered);
+  if(results[0].status==='rejected')notice('Statusübersicht derzeit nicht verfügbar.');
+}
+$('login-form').onsubmit=async event=>{
+  event.preventDefault();if(!window.isSecureContext){$('login-error').textContent='Bitte die HTTPS-Adresse oder den lokalen SSH-Tunnel verwenden.';return;}
+  const password=$('login-password').value;
+  if(bootstrapAccount&&password!==$('login-password-confirm').value){$('login-error').textContent='Die Passwörter stimmen nicht überein.';return;}
+  $('login-submit').disabled=true;$('login-error').textContent='';
+  try{await api(bootstrapAccount?'auth/bootstrap':'session',{method:'POST',body:JSON.stringify({email:$('login-email').value,password,remember:$('login-remember').checked})});await restoreLogin();}
+  catch(e){$('login-error').textContent=e.message;}finally{$('login-submit').disabled=false;}
+};
+$('logout').onclick=async()=>{try{await api('session',{method:'DELETE'});}catch{}await showLogin();};
+$('password-form').onsubmit=async event=>{event.preventDefault();try{await api('account/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value})});$('password-form').reset();$('password-status').textContent='Passwort geändert. Andere Sitzungen wurden abgemeldet.';}catch(e){$('password-status').textContent=e.message;}};
+$('new-account-form').onsubmit=async event=>{event.preventDefault();try{await api('accounts',{method:'POST',body:JSON.stringify({email:$('new-account-email').value,password:$('new-account-password').value,role:$('new-account-role').value})});$('new-account-form').reset();$('new-account-status').textContent='Konto angelegt.';await loadAccounts();}catch(e){$('new-account-status').textContent=e.message;}};
 $('connect').onclick = async () => {
   $('connect').disabled=true;
   try { await restoreLogin(); }
@@ -177,7 +214,7 @@ $('chat-form').onsubmit = async event => {
   try {
     const result = await api('chat',{method:'POST',body:JSON.stringify({message,share_external:chatAiEnabled,conversation_id:conversationId})});
     progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
-    if(conversationId)localStorage.setItem('butler-conversation-id',conversationId);
+    if(conversationId)localStorage.setItem(conversationKey(),conversationId);
     loadConversations().catch(()=>{});
     if ($('speak').checked && 'speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(result.answer); utterance.lang='de-DE';
@@ -218,8 +255,6 @@ async function startLocalRecording(){
   }catch(e){stream?.getTracks().forEach(track=>track.stop());voiceConversation=false;setMic(false);notice(e.message);}
 }
 $('mic').onclick=()=>{if(voiceConversation){voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();setMic(false);notice('Sprachgespräch beendet.');return;}voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
-$('pair-phone').onclick=async()=>{try{const result=await api('session/pairing',{method:'POST'});$('pairing-info').textContent=result.url+' · Code: '+result.code+' · 10 Minuten gültig, einmal verwendbar.';}catch(e){$('pairing-info').textContent=e.message;}};
-$('pair-form').onsubmit=async event=>{event.preventDefault();try{await api('session/pair',{method:'POST',body:JSON.stringify({code:$('pair-code').value})});$('pair-dialog').close();$('pair-code').value='';await restoreLogin();}catch(e){$('pair-error').textContent=e.message;}};
 setInterval(() => { if (connected) refresh().catch(e=>notice(e.message)); },30000);
 
 
@@ -438,6 +473,7 @@ let installPrompt=null;
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;});
 $('install-app').onclick=async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;}else $('install-dialog').showModal();};
 $('install-close').onclick=()=>$('install-dialog').close();
+window.addEventListener('pageshow',event=>{if(event.persisted){$('app-shell').hidden=true;restoreLogin().catch(()=>showLogin());}});
 window.addEventListener('online',()=>{notice('Wieder verbunden.');if(connected)refresh().then(()=>notice('')).catch(e=>notice(e.message));});
 function fitAppViewport(){document.documentElement.style.setProperty('--app-height',(window.visualViewport?.height||window.innerHeight)+'px');document.body.classList.toggle('keyboard-open',Boolean(window.visualViewport&&window.innerHeight-window.visualViewport.height>120&&document.activeElement?.id==='question'));}
 window.visualViewport?.addEventListener('resize',fitAppViewport);window.addEventListener('resize',fitAppViewport);$('question').addEventListener('focus',fitAppViewport);$('question').addEventListener('blur',fitAppViewport);fitAppViewport();
@@ -445,6 +481,6 @@ window.addEventListener('offline',()=>notice('Du bist offline. Dein Butler ist w
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 welcome();showView();
 
-restoreLogin().catch(e=>{ notice(e.message);if(location.hostname!=='127.0.0.1'&&location.hostname!=='localhost') $('pair-dialog').showModal(); });
+restoreLogin().catch(()=>showLogin());
 
 window.addEventListener('beforeunload',event=>{ if(dirtyServices.size||contextDirty){event.preventDefault();event.returnValue='';} });

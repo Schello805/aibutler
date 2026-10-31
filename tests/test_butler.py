@@ -140,26 +140,28 @@ def test_models_pagination_and_secret_handling(tmp_path,monkeypatch):
 
 def test_persistent_session_and_csrf(tmp_path):
     s=Settings(_env_file=None,data_dir=tmp_path,api_token='session-test',worker_enabled=False)
-    app=create_app(s)
-    with TestClient(app) as client:
-        assert client.post('/api/session',headers={'Authorization':'Bearer wrong'}).status_code==401
-        r=client.post('/api/session',headers={'Authorization':'Bearer session-test'})
+    app=create_app(s);app.state.accounts.create('owner@example.org','a-secure-example-passphrase')
+    with TestClient(app,base_url='https://testserver') as client:
+        headers={'Origin':'https://testserver'}
+        assert client.post('/api/session',json={'email':'owner@example.org','password':'wrong'},headers=headers).status_code==401
+        r=client.post('/api/session',json={'email':'owner@example.org','password':'a-secure-example-passphrase'},headers=headers)
         assert r.status_code==200
         cookie=r.headers['set-cookie'].lower()
-        assert 'httponly' in cookie and 'samesite=strict' in cookie and 'max-age=2592000' in cookie
+        assert 'httponly' in cookie and 'samesite=strict' in cookie and 'max-age=2592000' in cookie and 'secure' in cookie
         assert 'session-test' not in cookie
         assert client.get('/api/connections').status_code==200
-        assert client.put('/api/context',json={'projects':[]},headers={'Origin':'http://evil.example'}).status_code==403
+        assert client.put('/api/context',json={'projects':[]},headers={'Origin':'https://evil.example'}).status_code==403
         assert client.put('/api/context',json={'projects':[]}).status_code==403
-        assert client.put('/api/context',json={'projects':[]},headers={'Origin':'http://testserver'}).status_code==200
-        # Same cookie also works after constructing a new server instance.
-        with TestClient(create_app(s)) as restarted:
+        assert client.put('/api/context',json={'projects':[]},headers=headers).status_code==200
+        with TestClient(create_app(s),base_url='https://testserver') as restarted:
             restarted.cookies.update(client.cookies)
             assert restarted.get('/api/session').status_code==200
-        assert client.delete('/api/session',headers={'Origin':'http://testserver'}).status_code==200
+        stolen=client.cookies.get('butler_session')
+        assert client.delete('/api/session',headers=headers).status_code==200
         assert client.get('/api/session').status_code==401
-        client.cookies.set('butler_session','9999999999.forged')
+        client.cookies.set('butler_session',stolen)
         assert client.get('/api/session').status_code==401
+
 
 def test_iobroker_status_semantics_context_only(tmp_path):
     from backend.smarthome import classify
@@ -221,19 +223,21 @@ def test_iobroker_config_validation(tmp_path):
     with pytest.raises(ValidationError):
         Settings(_env_file=None,iobroker_patterns='')
 
-def test_automatic_local_login(tmp_path):
+def test_local_setup_replaces_automatic_login(tmp_path):
     app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='local-test',worker_enabled=False))
     with TestClient(app,base_url='http://127.0.0.1:8010',client=('127.0.0.1',54321)) as client:
         assert client.get('/api/connections').status_code==401
-        assert client.post('/api/session/local').status_code==403
-        assert client.post('/api/session/local',headers={'Origin':'https://evil.example'}).status_code==403
+        assert client.post('/api/session/local').status_code==404
+        value={'email':'owner@example.org','password':'a-secure-example-passphrase'}
+        assert client.post('/api/auth/bootstrap',json=value,headers={'Origin':'https://evil.example'}).status_code==403
         headers={'Origin':'http://127.0.0.1:8010','Sec-Fetch-Site':'same-origin'}
-        assert client.post('/api/session/local',headers={**headers,'Sec-Fetch-Site':'cross-site'}).status_code==403
-        assert client.post('/api/session/local',headers=headers).status_code==200
+        assert client.post('/api/auth/bootstrap',json=value,headers={**headers,'Sec-Fetch-Site':'cross-site'}).status_code==403
+        assert client.post('/api/auth/bootstrap',json=value,headers=headers).status_code==200
         assert client.get('/api/connections').status_code==200
-        assert client.put('/api/context',headers=headers,json={'projects':[]}).status_code==200
+        assert client.post('/api/auth/bootstrap',json=value,headers=headers).status_code==409
     with TestClient(app,base_url='http://127.0.0.1:8010',client=('192.168.1.42',54321)) as remote:
-        assert remote.post('/api/session/local',headers=headers).status_code==403
+        assert remote.post('/api/auth/bootstrap',json=value,headers=headers).status_code==403
+
 
 def test_question_retrieval_ignores_function_words_and_deduplicates(tmp_path):
     store=Store(tmp_path)
@@ -669,37 +673,29 @@ def test_question_can_combine_mail_and_ntfy_with_coverage(tmp_path,monkeypatch):
         assert {'imap','ntfy'}<={source.get('source') for source in r.json()['sources']}
         assert not store.events()
 
-def test_mobile_pairing_https_single_use(tmp_path):
+def test_mobile_account_login_replaces_pairing(tmp_path):
     settings=Settings(_env_file=None,data_dir=tmp_path,api_token='test-secret',worker_enabled=False,public_origin='https://butler.example')
-    app=create_app(settings)
-    with TestClient(app,base_url='http://127.0.0.1',client=('127.0.0.1',1234)) as local:
-        assert local.post('/api/session/local',headers={'origin':'http://127.0.0.1'}).status_code==200
-        result=local.post('/api/session/pairing',headers={'origin':'http://127.0.0.1'})
-        assert result.status_code==200
-        code=result.json()['code']
-        with TestClient(app,base_url='https://butler.example') as phone:
-            assert phone.post('/api/session/local',headers={'origin':'https://butler.example'}).status_code==403
-            assert phone.get('/api/status').status_code==401
-            assert phone.post('/api/session/pair',json={'code':code},headers={'origin':'https://evil.example'}).status_code==403
-            response=phone.post('/api/session/pair',json={'code':code},headers={'origin':'https://butler.example'})
-            assert response.status_code==200
-            assert 'Secure' in response.headers['set-cookie']
-            assert phone.get('/api/status').status_code==200
-            assert phone.get('/api/status').headers['cache-control']=='no-store'
-            assert phone.post('/api/session/pair',json={'code':code},headers={'origin':'https://butler.example'}).status_code==403
-        with TestClient(app,base_url='http://butler.example') as insecure:
-            assert insecure.get('/').status_code==403
+    app=create_app(settings);app.state.accounts.create('owner@example.org','a-secure-example-passphrase')
+    with TestClient(app,base_url='https://butler.example') as phone:
+        assert phone.post('/api/session/pair',json={'code':'1234567890'}).status_code==404
+        assert phone.post('/api/session/pairing').status_code==404
+        assert phone.get('/api/status').status_code==401
+        payload={'email':'owner@example.org','password':'a-secure-example-passphrase'}
+        assert phone.post('/api/session',json=payload,headers={'Origin':'https://evil.example'}).status_code==403
+        assert phone.post('/api/session',json=payload,headers={'Origin':'https://butler.example'}).status_code==200
+        assert phone.get('/api/status').status_code==200
+        assert phone.get('/api/status').headers['cache-control']=='no-store'
+    with TestClient(app,base_url='http://butler.example') as insecure:
+        assert insecure.get('/').status_code==403
 
-def test_pairing_attempt_limit(tmp_path):
-    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test-secret',worker_enabled=False,public_origin='https://butler.example'))
-    with TestClient(app,base_url='http://127.0.0.1',client=('127.0.0.1',1234)) as local:
-        local.post('/api/session/local',headers={'origin':'http://127.0.0.1'})
-        code=local.post('/api/session/pairing',headers={'origin':'http://127.0.0.1'}).json()['code']
-        with TestClient(app,base_url='https://butler.example') as phone:
-            wrong='0000000000' if code!='0000000000' else '1111111111'
-            for _ in range(10):
-                assert phone.post('/api/session/pair',json={'code':wrong},headers={'origin':'https://butler.example'}).status_code==403
-            assert phone.post('/api/session/pair',json={'code':code},headers={'origin':'https://butler.example'}).status_code==403
+
+def test_account_login_attempt_limit(tmp_path):
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test-secret',worker_enabled=False))
+    with TestClient(app,base_url='https://testserver') as client:
+        for _ in range(10):
+            assert client.post('/api/session',json={'email':'unknown@example.org','password':'wrong'},headers={'Origin':'https://testserver'}).status_code==401
+        assert client.post('/api/session',json={'email':'unknown@example.org','password':'wrong'},headers={'Origin':'https://testserver'}).status_code==429
+
 
 def test_local_speech_endpoint_private_and_limits(tmp_path,monkeypatch):
     import backend.speech as speech
