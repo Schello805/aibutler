@@ -321,6 +321,8 @@ Der Healthcheck bestätigt den Backend-Start, nicht die Erreichbarkeit deiner ex
 
 ## 10. Datenschutz, Funktionsumfang und Grenzen
 
+Sicherheitsmaßnahmen, Prüfstand und Hinweise zum Betrieb stehen in [SECURITY.md](SECURITY.md). Die App begrenzt Anfragen und parallele Chat-Recherchen, setzt restriktive Browser-Sicherheitsheader und schützt lokale Daten durch private Dateirechte.
+
 - Dokumenttexte, E-Mails, Kontext, Chats und Index liegen lokal im LXC in SQLite/Dateien. Sie sind **durch die App nicht verschlüsselt**; Dateirechte und bei Bedarf Datenträger-/Backup-Verschlüsselung verwenden.
 - Chat-KI und Hintergrund-KI sind getrennt. Bei einer frischen Installation sind beide aus. Mit Chatfreigabe erhält der gewählte Anbieter die Frage, passenden Kontext/Belege und für Rückfragen bis zu sechs letzte Gesprächsnachrichten, je auf 1.600 Zeichen begrenzt. Die Anbieterfreigabe ist keine Anonymisierung.
 - OpenAI-/Gemini-Aufrufe verwenden HTTPS mit Zertifikatsprüfung. Der Anbieter entschlüsselt die ausgewählten Inhalte zur Verarbeitung. Eine Garantie „beim Anbieter kann niemand lesen“ gibt es damit nicht. Dafür wäre ein lokales Sprachmodell nötig. OpenAI-Aufrufe setzen `store:false`; das ist keine Zusage vollständiger Zero Data Retention.

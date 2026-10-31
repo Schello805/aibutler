@@ -59,7 +59,7 @@ def create_app(settings=None):
                 running.cancel()
                 with suppress(asyncio.CancelledError):
                     await running
-    app = FastAPI(title='Lokaler KI-Butler', lifespan=lifespan)
+    app = FastAPI(title='Lokaler KI-Butler', lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     @app.exception_handler(RequestValidationError)
     async def private_validation_error(request,exception):
         return JSONResponse({'detail':[{key:error[key] for key in ('loc','msg','type') if key in error} for error in exception.errors()]},status_code=422)
@@ -69,18 +69,14 @@ def create_app(settings=None):
         raise RuntimeError('PUBLIC_ORIGIN muss eine reine HTTPS-Origin sein')
     allowed_hosts=['localhost','127.0.0.1','testserver']+([public.hostname] if public.hostname else [])
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    from .security import SecurityMiddleware
     app.state.store, app.state.worker = store, worker
     @app.middleware('http')
     async def private_responses(request,call_next):
         if public.hostname and request.url.hostname==public.hostname and request.url.scheme!='https':
             return JSONResponse({'detail':'Handy-Zugriff erfordert HTTPS'},status_code=403)
-        response=await call_next(request)
-        if request.url.path.startswith('/api') or request.url.path=='/':
-            response.headers['Cache-Control']='no-store'
-        response.headers['Referrer-Policy']='no-referrer'
-        response.headers['X-Content-Type-Options']='nosniff'
-        response.headers['Permissions-Policy']='microphone=(self)'
-        return response
+        return await call_next(request)
+    app.add_middleware(SecurityMiddleware)
     cookie_name='butler_session'
     app.state.accounts=accounts
 
@@ -251,7 +247,12 @@ def create_app(settings=None):
         if result is None:raise HTTPException(404,'Gespräch nicht gefunden')
         return result
 
-    @app.post('/api/chat',dependencies=protected)
+    chat_slots=asyncio.Semaphore(2)
+    async def chat_capacity():
+        if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
+        async with chat_slots:yield
+
+    @app.post('/api/chat',dependencies=[*protected,Depends(chat_capacity)])
     async def chat(value: Chat,request:Request):
         owner_id=user_owner(request)
         previous=store.conversation(value.conversation_id,owner_id) if value.conversation_id else None

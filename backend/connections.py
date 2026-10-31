@@ -7,7 +7,7 @@ from typing import Literal
 import httpx
 from dotenv import set_key
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from .intelligence import generate
 from .smarthome import IoBrokerConfig, read_iobroker, scope
 
@@ -48,6 +48,20 @@ class ConnectionConfig(IoBrokerConfig):
     ntfy_history_enabled: bool = True
     ntfy_mode: Literal['off','important','digest'] = 'important'
     ntfy_interval_seconds: int = Field(default=3600,ge=60,le=86400)
+
+    @field_validator('paperless_url','ntfy_url')
+    @classmethod
+    def safe_service_url(cls,value):
+        from urllib.parse import urlsplit
+        if not value:return value
+        try:
+            parts=urlsplit(value)
+            valid=parts.scheme in ('http','https') and parts.hostname and not (parts.username or parts.password or parts.query or parts.fragment)
+            port=parts.port
+        except ValueError:valid=False
+        if not valid or len(value)>2048 or any(character.isspace() or ord(character)<32 or ord(character)==127 for character in value):
+            raise ValueError('Vollständige HTTP(S)-Adresse ohne eingebettete Zugangsdaten, URL-Parameter oder Fragment verwenden')
+        return value.rstrip('/')
 
 def connection_router(s, worker, auth, env_path=Path('.env')):
     router = APIRouter(prefix='/api/connections',dependencies=[Depends(auth)])

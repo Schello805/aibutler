@@ -1,5 +1,6 @@
 """Local chunk retrieval using SQLite FTS5; no embedding downloads or cloud index."""
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -9,7 +10,11 @@ from pathlib import Path
 class Store:
     def __init__(self, root: Path):
         root.mkdir(parents=True, exist_ok=True)
+        root.chmod(0o700)
         self.path = root / 'butler.sqlite3'
+        descriptor=os.open(self.path,os.O_CREAT|os.O_RDWR,0o600)
+        os.close(descriptor)
+        self.path.chmod(0o600)
         with self.connect() as db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,title TEXT,updated TEXT DEFAULT CURRENT_TIMESTAMP);
