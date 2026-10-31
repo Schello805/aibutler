@@ -1,0 +1,224 @@
+"""Local chunk retrieval using SQLite FTS5; no embedding downloads or cloud index."""
+import json
+import re
+import sqlite3
+from .retrieval import query_terms, relevant_evidence, evidence_recency, account_activity_kind, message_text
+from pathlib import Path
+
+class Store:
+    def __init__(self, root: Path):
+        root.mkdir(parents=True, exist_ok=True)
+        self.path = root / 'butler.sqlite3'
+        with self.connect() as db:
+            db.executescript('''
+            CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
+            CREATE INDEX IF NOT EXISTS smart_history_latest ON smart_history(scope,state_id,id DESC);
+            CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE IF NOT EXISTS mail_metadata(item_id TEXT PRIMARY KEY,sender_name TEXT,sender_address TEXT,sent_at TEXT);
+            CREATE TABLE IF NOT EXISTS item_metadata(item_id TEXT PRIMARY KEY, document_date TEXT, filename TEXT);
+            CREATE TABLE IF NOT EXISTS notification_state(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE IF NOT EXISTS smart_snapshots(scope TEXT PRIMARY KEY, checked TEXT, states TEXT);
+            CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY, version TEXT, title TEXT, body TEXT, source TEXT);
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(item_id UNINDEXED, title, body);
+            CREATE TABLE IF NOT EXISTS context(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT);
+            INSERT OR IGNORE INTO context VALUES(1, '{"projects":[]}');
+            CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, item_id TEXT, title TEXT, reason TEXT, sent INTEGER DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
+            ''')
+            if db.execute("INSERT OR IGNORE INTO notification_state VALUES('quiet-policy-v1','1')").rowcount:
+                # Preserve all findings, but retire the old noisy notification backlog once.
+                db.execute('UPDATE events SET sent=2 WHERE sent=0')
+
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=30)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def context(self):
+        with self.connect() as db:
+            return json.loads(db.execute('SELECT value FROM context WHERE id=1').fetchone()[0])
+
+    def save_context(self, value):
+        with self.connect() as db:
+            db.execute('UPDATE context SET value=? WHERE id=1', (json.dumps(value),))
+
+    def unchanged(self, item):
+        with self.connect() as db:
+            row = db.execute('SELECT version FROM items WHERE id=?', (item['id'],)).fetchone()
+            return row is not None and row[0] == item['version']
+
+    def set_item_metadata(self,item):
+        if item.get('source')=='imap' and 'sender_address' in item:
+            with self.connect() as db:
+                db.execute('INSERT OR REPLACE INTO mail_metadata VALUES(?,?,?,?)',(item['id'],item.get('sender_name',''),item.get('sender_address',''),item.get('sent_at','')))
+        if not item.get('document_date'):
+            return
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO item_metadata VALUES(?,?,?)',(item['id'],item['document_date'],item.get('filename','')))
+
+    def commit_item(self, item, reason=None, notify=True):
+        self.set_item_metadata(item)
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO items VALUES(?,?,?,?,?)', tuple(item[k] for k in ('id','version','title','body','source')))
+            db.execute('DELETE FROM chunks WHERE item_id=?', (item['id'],))
+            for start in range(0, max(1, len(item['body'])), 1000):
+                db.execute('INSERT INTO chunks VALUES(?,?,?)', (item['id'], item['title'], item['body'][start:start+1200]))
+            if reason:
+                db.execute('INSERT INTO events(item_id,title,reason,sent) VALUES(?,?,?,?)', (item['id'],item['title'],reason,0 if notify else 2))
+
+    def mail_metadata_ids(self):
+        with self.connect() as db:
+            return {r[0] for r in db.execute('SELECT item_id FROM mail_metadata')}
+
+    def sender_messages(self,name):
+        with self.connect() as db:
+            rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sender_name,m.sender_address,m.sent_at AS document_date FROM items i JOIN mail_metadata m ON m.item_id=i.id WHERE lower(m.sender_name || ' ' || m.sender_address) LIKE ? ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 5",('%'+name.lower()+'%',))
+            return [dict(row) for row in rows]
+
+    def recent_account_activity(self):
+        with self.connect() as db:
+            rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sent_at AS document_date,m.sender_name,m.sender_address FROM items i LEFT JOIN mail_metadata m ON m.item_id=i.id WHERE i.source='imap' AND (lower(i.title) LIKE '%login%' OR lower(i.title) LIKE '%sign%in%' OR lower(i.title) LIKE '%anmeld%' OR lower(i.title) LIKE '%registrier%' OR lower(i.title) LIKE '%willkommen%' OR lower(i.title) LIKE '%welcome%' OR lower(i.title) LIKE '%account created%') ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 100")
+            groups={'login':[],'signup':[]}
+            for row in rows:
+                hit=dict(row);kind=account_activity_kind(hit)
+                if not kind or len(groups[kind])>=3:continue
+                hit['body']=message_text(hit['body'])[:6000];hit['activity_kind']=kind;groups[kind].append(hit)
+            # Preserve both meanings of "angemeldet" when a question is ambiguous.
+            result=[]
+            for index in range(3):
+                for group in groups.values():
+                    if index<len(group):result.append(group[index])
+            return result[:5]
+
+    def recent_purchases(self):
+        # Prefer actual order confirmations over shipping updates, advertising and payouts.
+        with self.connect() as db:
+            rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sent_at AS document_date,m.sender_name,m.sender_address FROM items i LEFT JOIN mail_metadata m ON m.item_id=i.id WHERE i.source='imap' AND (i.title LIKE 'Bestellt:%' OR lower(i.title) LIKE '%bestellbestätigung%' OR lower(i.title) LIKE '%bestellung bestätigt%' OR lower(i.title) LIKE '%order confirmation%') ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 5")
+            return [dict(row) for row in rows]
+
+    def mail_ids(self):
+        with self.connect() as db:
+            return {r[0] for r in db.execute("SELECT id FROM items WHERE source='imap'")}
+
+    def search(self, query, exclude='', strict=True, source_filter=None):
+        terms=query_terms(query)
+        if not terms:
+            return []
+        # Require terms across the whole document, not necessarily the same chunk.
+        # Rank short excerpts afterwards, reserving space for each matching source.
+        expression=' OR '.join(terms)
+        conditions=''.join(' AND c.item_id IN (SELECT item_id FROM chunks WHERE chunks MATCH ?)' for _ in terms) if strict else ''
+        with self.connect() as db:
+            sources=[r[0] for r in db.execute('SELECT DISTINCT source FROM items ORDER BY source')]
+            groups=[]
+            for source in sources:
+                if source_filter is not None and source not in source_filter:continue
+                sql='SELECT c.item_id,c.title,c.body,i.source FROM chunks c JOIN items i ON i.id=c.item_id WHERE chunks MATCH ? AND c.item_id != ? AND i.source=?'+conditions+' ORDER BY rank'
+                params=[expression,exclude,source]+(terms if strict else [])
+                hits,seen=[],set()
+                for row in db.execute(sql,params):
+                    if row['item_id'] in seen:
+                        continue
+                    seen.add(row['item_id'])
+                    full=db.execute('SELECT body FROM items WHERE id=?',(row['item_id'],)).fetchone()[0]
+                    if strict and not relevant_evidence(query,row['title'],full):
+                        continue
+                    hit=dict(row);hit['body']=(message_text(full) if source=='imap' else full)[:10000]
+                    meta=db.execute('SELECT document_date,filename FROM item_metadata WHERE item_id=?',(row['item_id'],)).fetchone()
+                    if meta:
+                        hit.update(dict(meta))
+                    hits.append(hit)
+                    if len(hits)==50:
+                        break
+                if hits:
+                    if source=='ntfy' or (strict and re.search(r'wartung|gewartet',query,re.I)):
+                        hits.sort(key=evidence_recency,reverse=True)
+                    groups.append(hits[:5])
+            # Round-robin keeps relevant mail and Paperless evidence together.
+            result=[]
+            for index in range(5):
+                for group in groups:
+                    if index<len(group):
+                        result.append(group[index])
+                        if len(result)==5:
+                            return result
+            return result
+
+    def events(self, pending=False):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM events WHERE item_id NOT LIKE 'iobroker:%' "+('AND sent=0 ' if pending else '')+'ORDER BY id DESC LIMIT 100')]
+
+    def mark_sent(self, event_id):
+        with self.connect() as db:
+            db.execute('UPDATE events SET sent=1 WHERE id=?', (event_id,))
+
+    def smart_snapshot(self, scope):
+        with self.connect() as db:
+            row=db.execute('SELECT checked,states FROM smart_snapshots WHERE scope=?',(scope,)).fetchone()
+            return {'checked':row['checked'],'states':json.loads(row['states'])} if row else {'checked':None,'states':[]}
+
+    def save_smart_snapshot(self, scope, states, checked):
+        self.record_smart_states(scope,states,checked)
+        with self.connect() as db:
+            row=db.execute('SELECT states FROM smart_snapshots WHERE scope=?',(scope,)).fetchone()
+            previous={s['id']:s for s in json.loads(row['states'])} if row else {}
+            current={s['id']:s for s in states}
+            # Only a complete successful poll can mark a previously returned state as absent.
+            for state_id,old in previous.items():
+                if state_id not in current:
+                    current[state_id]={**old,'status':'missing','value':None}
+            values=sorted(current.values(),key=lambda s:s['id'])
+            db.execute('INSERT OR REPLACE INTO smart_snapshots VALUES(?,?,?)',(scope,checked,json.dumps(values,ensure_ascii=False)))
+
+    def notification_value(self,key,default=''):
+        with self.connect() as db:
+            row=db.execute('SELECT value FROM notification_state WHERE key=?',(key,)).fetchone()
+            return row[0] if row else default
+
+    def set_notification_value(self,key,value):
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO notification_state VALUES(?,?)',(key,str(value)))
+
+    def pending_notifications(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM events WHERE sent=0 AND item_id NOT LIKE 'iobroker:%' ORDER BY id LIMIT 1000")]
+
+    def settle_notifications(self, ids, sent=False):
+        with self.connect() as db:
+            db.executemany('UPDATE events SET sent=? WHERE id=?',[(1 if sent else 2,event_id) for event_id in ids])
+
+    def save_sync_state(self,key,value):
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO sync_state VALUES(?,?)',(key,json.dumps(value,ensure_ascii=False)))
+
+    def sync_state(self,key):
+        with self.connect() as db:
+            row=db.execute('SELECT value FROM sync_state WHERE key=?',(key,)).fetchone()
+            return json.loads(row[0]) if row else {}
+
+    def sync_overview(self):
+        with self.connect() as db:
+            states=[{'key':r[0],**json.loads(r[1])} for r in db.execute('SELECT key,value FROM sync_state')]
+            counts={r[0]:r[1] for r in db.execute('SELECT source,count(*) FROM items GROUP BY source')}
+        return {'states':states,'indexed':counts}
+
+    def record_smart_states(self, scope, states, checked):
+        with self.connect() as db:
+            for state in states:
+                value=json.dumps(state['value'],ensure_ascii=False,sort_keys=True)
+                last=db.execute('SELECT value,status FROM smart_history WHERE scope=? AND state_id=? ORDER BY id DESC LIMIT 1',(scope,state['id'])).fetchone()
+                if last and last[0]==value and last[1]==state['status']:continue
+                db.execute('INSERT INTO smart_history(scope,state_id,name,value,status,checked,source_ts) VALUES(?,?,?,?,?,?,?)',(scope,state['id'],state['name'],value,state['status'],checked,str(state.get('source_ts',''))))
+
+    def smart_history_context(self,scope,queries):
+        words=list(dict.fromkeys(word.casefold() for query in queries for word in re.findall(r'\w{3,}',query)))[:15]
+        if not words:return []
+        with self.connect() as db:
+            clauses=' OR '.join("lower(state_id || ' ' || name) LIKE ?" for _ in words)
+            rows=db.execute('SELECT state_id,name,value,status,checked,source_ts FROM smart_history WHERE scope=? AND ('+clauses+') ORDER BY id DESC LIMIT 30',[scope]+['%'+word+'%' for word in words])
+            return [dict(row) for row in rows]
+
+    def coverage_summary(self):
+        overview=self.sync_overview()
+        archives=[state for state in overview['states'] if state['key'].startswith('mail-archive:')]
+        topics=[state for state in overview['states'] if state['key'].startswith('ntfy:')]
+        return {'indexed':overview['indexed'],'mail_archive_started':bool(archives),'mail_archive_complete':bool(archives) and all(state.get('complete',False) for state in archives),'mail_archive_remaining':sum(state.get('remaining',0) for state in archives),'ntfy_topics_synced':sum(not state.get('error') for state in topics),'ntfy_topics_failed':sum(bool(state.get('error')) for state in topics),'ntfy_cache_replay_ok':bool(topics) and all(not state.get('error') and not state.get('truncated') for state in topics),'ntfy_retention':'Nur zum ersten Abruf noch auf dem Server gespeicherte Meldungen und anschließend lokal archivierte Ereignisse; frühere gelöschte Daten fehlen.','smart_history':'Lokale Zustandsänderungen erst seit Einrichtung erfasst; aktuelle Zustände sind keine vollständige Historie.'}

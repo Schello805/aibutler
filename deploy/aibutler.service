@@ -1,0 +1,23 @@
+[Unit]
+Description=Lokaler KI-Butler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aibutler
+WorkingDirectory=/opt/aibutler
+EnvironmentFile=/etc/aibutler-proxy.env
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+ExecStart=/opt/aibutler/.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8010 --workers 1 --proxy-headers --forwarded-allow-ips=${TRUSTED_PROXY_IP}
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/aibutler/data /opt/aibutler/.env
+
+[Install]
+WantedBy=multi-user.target

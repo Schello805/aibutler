@@ -1,0 +1,4 @@
+# Auf dem Reverse-Proxy-Rechner verwenden. DNS muss auf diesen Proxy zeigen.
+butler.example.com {
+    reverse_proxy 192.168.1.100:8010
+}
