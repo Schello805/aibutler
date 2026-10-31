@@ -1,4 +1,5 @@
-# Auf dem Reverse-Proxy-Rechner verwenden. DNS muss auf diesen Proxy zeigen.
-butler.example.com {
-    reverse_proxy 192.168.1.100:8010
+# Beispiel auf deinem HTTPS-Proxy. Domain und LXC-IP ersetzen.
+# --proxy-ip muss zur direkten IP dieses Proxy-Rechners passen.
+ai.example.com {
+    reverse_proxy 192.168.1.50:8010
 }

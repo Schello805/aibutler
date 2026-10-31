@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings, IoBrokerConfig):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+    speech_enabled: bool = True
     public_origin: str = ''
     api_token: str = ''
     data_dir: Path = Path('data')

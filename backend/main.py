@@ -1,4 +1,5 @@
 import asyncio
+import os
 import ipaddress
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -40,7 +41,7 @@ class Chat(BaseModel):
 
 
 def create_app(settings=None):
-    s = settings or Settings()
+    s = settings or Settings(_env_file=os.environ.get('BUTLER_ENV_FILE','.env'))
     store = Store(s.data_dir)
     worker = Worker(s,store)
     @asynccontextmanager
@@ -155,8 +156,12 @@ def create_app(settings=None):
         return response
 
     from .connections import connection_router
-    app.include_router(connection_router(s,worker,auth))
+    app.include_router(connection_router(s,worker,auth,env_path=Path(os.environ.get('BUTLER_ENV_FILE','.env'))))
     protected = [Depends(auth)]
+    @app.get('/healthz')
+    async def health():
+        return {'status':'ok'}
+
     @app.get('/api/status',dependencies=protected)
     async def status():
         return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s)}
@@ -321,10 +326,11 @@ def create_app(settings=None):
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])
     async def speech_status():
-        return {'local':True,'ready':(s.data_dir/'models/whisper-base/model.bin').is_file(),'max_seconds':60}
+        return {'local':True,'ready':s.speech_enabled and (s.data_dir/'models/whisper-base/model.bin').is_file(),'max_seconds':60}
 
     @app.post('/api/speech/transcribe',dependencies=[Depends(auth)])
     async def speech_transcribe(request:Request):
+        if not s.speech_enabled:raise HTTPException(503,'Lokale Spracherkennung ist in dieser Installation deaktiviert')
         if speech_lock.locked():
             raise HTTPException(429,'Spracherkennung ist gerade beschäftigt')
         if request.headers.get('content-type','').split(';')[0]!='application/octet-stream':
