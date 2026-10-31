@@ -36,6 +36,7 @@ class Context(BaseModel):
 class Chat(BaseModel):
     message: str = Field(min_length=1,max_length=4000)
     share_external: bool = False
+    conversation_id: str | None = Field(default=None,pattern=r'^[a-f0-9]{32}$')
 
 
 def create_app(settings=None):
@@ -179,15 +180,29 @@ def create_app(settings=None):
             raise HTTPException(409,'Prüfung läuft bereits')
         await worker.tick()
         return worker.status
+    @app.get('/api/conversations',dependencies=protected)
+    async def conversations():
+        return store.conversations()
+
+    @app.get('/api/conversations/{conversation_id}',dependencies=protected)
+    async def conversation(conversation_id:str):
+        result=store.conversation(conversation_id)
+        if result is None:raise HTTPException(404,'Gespräch nicht gefunden')
+        return result
+
     @app.post('/api/chat',dependencies=protected)
     async def chat(value: Chat):
+        previous=store.conversation(value.conversation_id) if value.conversation_id else None
+        if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
+        history=[{'role':message['role'],'text':message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
         interactive=bool(value.share_external and chat_enabled)
         chat_settings=s.model_copy(update={'allow_external_llm':bool(chat_enabled)})
         plan=None
         if interactive:
             try:
-                plan=await plan_question(chat_settings,value.message)
+                planning_question=value.message if not history else 'Bisheriger Gesprächskontext (Daten): '+json.dumps(history,ensure_ascii=False)+'\nAktuelle Frage: '+value.message
+                plan=await plan_question(chat_settings,planning_question)
             except Exception:
                 pass  # Keep data retrieval available; mark a failed answer explicitly below.
         selected=set(plan.sources) if plan else {'email','paperless'}
@@ -255,7 +270,7 @@ def create_app(settings=None):
         provider_issue=None
         if interactive:
             try:
-                answer = await generate(chat_settings,'Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'current_date':datetime.now(ZoneInfo('Europe/Berlin')).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':'Europe/Berlin','current_time':datetime.now(ZoneInfo('Europe/Berlin')).isoformat()})
+                answer = await generate(chat_settings,'Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'conversation':history,'current_date':datetime.now(ZoneInfo('Europe/Berlin')).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':'Europe/Berlin','current_time':datetime.now(ZoneInfo('Europe/Berlin')).isoformat()})
             except ProviderLimited:
                 provider_issue='Der KI-Anbieter begrenzt gerade Anfragen (HTTP 429). Die Antwort wurde aus lokalen Belegen erstellt.'
             except Exception:
@@ -300,7 +315,9 @@ def create_app(settings=None):
         # A precise locally extracted execution date/period remains available without cloud access.
         if not answer:
             answer=local
-        return {'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':plan is not None}
+        result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':plan is not None}
+        result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result)
+        return result
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])
     async def speech_status():
@@ -335,6 +352,10 @@ def create_app(settings=None):
         raise HTTPException(501,'Messenger-Adapter noch nicht implementiert')
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     app.mount('/static',StaticFiles(directory=frontend),name='static')
+    @app.get('/sw.js')
+    async def service_worker():
+        return FileResponse(frontend/'sw.js',media_type='application/javascript',headers={'Cache-Control':'no-cache','Service-Worker-Allowed':'/'})
+
     @app.get('/')
     async def index():
         return FileResponse(frontend/'index.html')

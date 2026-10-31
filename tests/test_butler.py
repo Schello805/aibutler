@@ -718,3 +718,56 @@ def test_local_speech_endpoint_private_and_limits(tmp_path,monkeypatch):
         result=client.post('/api/speech/transcribe',content=b'audio',headers=headers)
         assert result.json()=={'text':'Wann hat jemand geklingelt?','local':True}
         assert received==[b'audio']
+
+def test_conversation_history_persists_locally_and_requires_auth(tmp_path):
+    settings=Settings(_env_file=None,data_dir=tmp_path,api_token='test-secret',worker_enabled=False)
+    store=Store(tmp_path)
+    result={'answer':'Am 12. Mai.','sources':[{'id':'example','title':'Wartungsbeleg','excerpt':'Beispieltext'}],'diagnostics':[],'external_used':False}
+    id=store.save_exchange(None,'Wann war die Wartung?',result)
+    store.save_exchange(id,'In welchem Jahr?',{**result,'answer':'2025.'})
+    assert len(Store(tmp_path).conversation(id)['messages'])==4
+    with TestClient(create_app(settings)) as client:
+        assert client.get('/api/conversations').status_code==401
+        headers={'Authorization':'Bearer test-secret'}
+        assert client.get('/api/conversations',headers=headers).json()[0]['id']==id
+        restored=client.get('/api/conversations/'+id,headers=headers).json()
+        assert restored['messages'][1]['payload']['sources']==result['sources']
+        assert client.get('/api/conversations/missing',headers=headers).status_code==404
+        assert client.post('/api/chat',headers=headers,json={'message':'x','conversation_id':'../bad'}).status_code==422
+        assert client.post('/api/chat',headers=headers,json={'message':'x','conversation_id':'0'*32}).status_code==404
+
+
+def test_webapp_worker_is_public_but_private_data_not_in_cache(tmp_path):
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test-secret',worker_enabled=False))
+    with TestClient(app) as client:
+        response=client.get('/sw.js')
+        assert response.status_code==200
+        assert response.headers['service-worker-allowed']=='/'
+        assert "url.pathname.startsWith('/api/')" in response.text
+        manifest=client.get('/static/manifest.webmanifest').json()
+        assert manifest['display']=='standalone'
+        assert client.get('/static/offline.html').status_code==200
+
+def test_follow_up_passes_recent_conversation_to_planner_and_answer(tmp_path,monkeypatch):
+    import backend.main as module
+    from backend.planning import RetrievalPlan
+    planned=[];payloads=[]
+    async def plan(settings,question):
+        planned.append(question)
+        return RetrievalPlan(sources=[])
+    async def answer(settings,task,payload):
+        payloads.append(payload)
+        return 'Eine kurze Testantwort.'
+    monkeypatch.setattr(module,'plan_question',plan)
+    monkeypatch.setattr(module,'generate',answer)
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,chat_llm_enabled=True))
+    with TestClient(app) as client:
+        headers={'Authorization':'Bearer test'}
+        first=client.post('/api/chat',headers=headers,json={'message':'Wann war die Beispielwartung?','share_external':True}).json()
+        second=client.post('/api/chat',headers=headers,json={'message':'In welchem Jahr?','share_external':True,'conversation_id':first['conversation_id']}).json()
+        assert second['external_used'] is True
+        assert payloads[0]['conversation']==[]
+        assert payloads[1]['conversation'][0]['text']=='Wann war die Beispielwartung?'
+        assert len(payloads[1]['conversation'])==2
+        assert 'Aktuelle Frage: In welchem Jahr?' in planned[1]
+        assert second['conversation_id']==first['conversation_id']

@@ -1,12 +1,86 @@
 const $ = id => document.getElementById(id);
 let chatAiEnabled=false;
 let chatBusy=false;
+let conversationId=null;
+let contextDirty=false;
+const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/svg','svg');el.classList.add('icon');el.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#i-'+name);el.append(use);return el;};
+const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
+function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true)); }
+function setMic(active){$('mic').classList.toggle('recording',active);$('mic').replaceChildren(active?node('span','','■'):iconNode('mic'));$('mic').setAttribute('aria-label',active?'Sprachgespräch beenden':'Sprachgespräch starten');}
+function answerBubble(result){
+  const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
+  const answer=bubble(text,'assistant');
+  answer.querySelector('.message-role').textContent=result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
+  if(result.ai_issue){const status=node('small','answer-status','KI derzeit nicht verfügbar · lokale Ersatzantwort');status.title=result.ai_issue;answer.append(status);}
+  if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
+  return answer;
+}
+async function loadConversations(){
+  const conversations=await api('conversations');
+  for(const id of ['conversation-list','mobile-conversation-list']){
+    const list=$(id);list.replaceChildren();
+    if(!conversations.length) list.append(node('p','history-empty','Deine Gespräche erscheinen hier.'));
+    for(const conversation of conversations){const button=node('button','',conversation.title);button.type='button';button.title=conversation.title;button.disabled=chatBusy;button.setAttribute('aria-current',String(conversation.id===conversationId));button.onclick=()=>openConversation(conversation.id);list.append(button);}
+  }
+}
+async function openConversation(id){
+  if(chatBusy)return;
+  try{const conversation=await api('conversations/'+encodeURIComponent(id));voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();conversationId=id;localStorage.setItem('butler-conversation-id',id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
+  catch(e){notice(e.message);}
+}
+function newConversation(){
+  if(chatBusy)return;
+  voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();setMic(false);conversationId=null;localStorage.removeItem('butler-conversation-id');$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('question').focus();
+}
+const sourceDefinitions=[
+  {id:'imap',name:'E-Mails',icon:'mail',color:'blue',description:'Nachrichten, Bestellungen und Korrespondenz',unit:'Nachrichten im lokalen Index'},
+  {id:'paperless',name:'Dokumente',icon:'sources',color:'peach',description:'Deine Dokumente aus Paperless-ngx',unit:'Dokumente im lokalen Index'},
+  {id:'ntfy',name:'Ereignisse',icon:'notification',color:'lilac',description:'Benachrichtigungen und zeitliche Zusammenhänge',unit:'lokal gespeicherte Meldungen'},
+  {id:'iobroker',name:'Smart Home',icon:'home',color:'green',description:'Passende Zustände aus deinem ioBroker',unit:'Kontext bei passenden Fragen'}
+];
+function renderSources(status,sync){
+  $('source-preview').replaceChildren();$('source-grid').replaceChildren();let configuredCount=0;
+  for(const definition of sourceDefinitions){
+    const id=definition.id,health=status.sources[id==='ntfy'?'ntfy_history':id]||{};
+    const configured=Boolean(savedConfig&&(id==='imap'?savedConfig.imap_host:id==='paperless'?savedConfig.paperless_url:id==='ntfy'?(savedConfig.ntfy_history_urls||savedConfig.ntfy_url):savedConfig.iobroker_url));
+    if(configured)configuredCount++;
+    const count=sync.indexed[id]||0;
+    const statusText=!configured?'Noch nicht verbunden':health.disabled?'Abruf pausiert':health.error||health.errors?'Abruf prüfen':Object.keys(health).length?'Verbunden':'Abruf wird vorbereitet';
+    const state=!configured||health.disabled?'off':health.error||health.errors?'error':'ok';
+    const preview=node('a','source-preview-item');preview.href='#sources';preview.dataset.state=state;
+    const badge=node('span','source-icon '+definition.color);badge.append(iconNode(definition.icon));
+    const text=node('span');text.append(node('strong','',definition.name),node('small','',id==='iobroker'?(configured?'Bei passenden Fragen':'Noch nicht verbunden'):count.toLocaleString('de-DE')+' '+(id==='imap'?'Nachrichten':id==='paperless'?'Dokumente':'Meldungen')));
+    preview.append(badge,text,node('span','tiny-dot'));$('source-preview').append(preview);
+    const card=node('article','source-card');const heading=node('div','source-card-heading');const badge2=badge.cloneNode(true);const labels=node('div');labels.append(node('h2','',definition.name),node('p','source-card-description',definition.description));heading.append(badge2,labels);
+    const footer=node('div','source-card-footer');const stateLabel=node('span','',statusText);stateLabel.dataset.state=state;stateLabel.prepend(node('span','dot'));const settings=node('a','','Verbindung verwalten');settings.href='#service-'+id;settings.append(iconNode('arrow'));footer.append(stateLabel,settings);
+    card.append(heading,node('div','source-card-count',id==='iobroker'?(configured?'Auf Anfrage':'—'):count.toLocaleString('de-DE')),node('span','source-card-label',definition.unit),footer);$('source-grid').append(card);
+  }
+  $('nav-source-count').textContent=configuredCount;
+  $('chat-source-badge').textContent=configuredCount?configuredCount+' QUELLEN VERBUNDEN':'QUELLEN IN DEN EINSTELLUNGEN VERBINDEN';
+  const archives=sync.states.filter(state=>state.key.startsWith('mail-archive:'));
+  const total=archives.reduce((sum,s)=>sum+(s.total||0),0),indexed=archives.reduce((sum,s)=>sum+(s.indexed||0),0),percent=total?Math.min(100,Math.round(indexed/total*100)):0;
+  $('source-progress').value=percent;$('archive-percent').textContent=total?percent+' %':'—';
+  $('source-archive-status').textContent=total?indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' E-Mails aus '+archives.length+' Ordnern erfasst'+(archives.every(s=>s.complete)?' · Import vollständig':' · wird weiter eingelesen'):'Noch kein E-Mail-Archiv erfasst.';
+}
 async function api(path, options = {}) {
   const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
-  if (!response.ok) { const body = await response.json(); throw new Error(typeof body.detail === 'string' ? body.detail : 'Ungültige Eingabe. JSON-Struktur prüfen.'); }
+  if (!response.ok) { const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : 'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
   return response.json();
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
+function renderContext(){
+  const context=JSON.parse($('context-json').value);$('context-projects').replaceChildren();
+  if(!context.projects.length)$('context-projects').append(node('div','empty-state','Noch keine Projekte hinterlegt. Was hast du als Nächstes vor?'));
+  context.projects.forEach((project,index)=>{
+    const card=node('article','project-card'),heading=node('div','project-heading');const enabled=node('label','project-active');const checkbox=node('input');checkbox.type='checkbox';checkbox.checked=project.active!==false;enabled.append(checkbox,node('span','','Aktiv'));const remove=node('button','icon-button','✕');remove.type='button';remove.setAttribute('aria-label','Projekt entfernen');remove.onclick=()=>{context.projects.splice(index,1);$('context-json').value=JSON.stringify(context);contextDirty=true;renderContext();};heading.append(node('span','eyebrow','PROJEKT ODER PLAN'),enabled,remove);card.append(heading);
+    const update=()=>{$('context-json').value=JSON.stringify(context);contextDirty=true;};checkbox.onchange=()=>{project.active=checkbox.checked;update();};
+    for(const [key,title,placeholder] of [['name','Bezeichnung','Zum Beispiel: Umbau des Arbeitszimmers'],['keywords','Schlagwörter','Zum Beispiel: Schreibtisch, Beleuchtung, Renovierung'],['notes','Was sollte dein Butler dazu wissen?','Pläne, Termine oder wichtige Details …']]){
+      const label=node('label','project-field',title);const input=node(key==='notes'?'textarea':'input');input.value=key==='keywords'?(project.keywords||[]).join(', '):(project[key]||'');input.placeholder=placeholder;if(key==='notes'){input.rows=3;input.maxLength=2000;}else input.maxLength=key==='name'?200:3000;input.oninput=()=>{project[key]=key==='keywords'?input.value.split(',').map(x=>x.trim()).filter(Boolean):input.value;update();};label.append(input);card.append(label);
+    }
+    $('context-projects').append(card);
+  });$('add-project').disabled=context.projects.length>=30;
+}
+$('add-project').onclick=()=>{const context=JSON.parse($('context-json').value);if(context.projects.length>=30)return;context.projects.push({name:'',keywords:[],active:true,notes:''});$('context-json').value=JSON.stringify(context);contextDirty=true;renderContext();$('context-projects').lastElementChild?.querySelector('input:not([type=checkbox])')?.focus();};
 function formattedText(element,text) {
   // Render a small Markdown subset with DOM nodes only; source HTML stays inert.
   const parts=String(text).split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
@@ -53,7 +127,8 @@ async function refresh() {
   const indexed=archives.reduce((sum,state)=>sum+(state.indexed||0),0);
   $('archive-progress').textContent=archives.length?'E-Mail-Archiv: '+indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' Nachrichten in '+archives.length+' Ordnern erfasst'+(archives.every(state=>state.complete)?' · vollständig':' · wird weiter eingelesen'):'E-Mail-Archiv: Bestandsaufnahme wird vorbereitet.';
   $('source-counts').textContent=Object.entries(sync.indexed).map(([source,count])=>({imap:'E-Mails',paperless:'Dokumente',ntfy:'ntfy-Ereignisse'}[source]||source)+': '+count.toLocaleString('de-DE')).join(' · ');
-  $('connection').textContent = status.external_llm ? 'Verbunden · Externe KI freigegeben' : 'Verbunden · Lokaler Modus';
+  renderSources(status,sync);
+  $('connection').textContent = status.external_llm ? 'Chat-KI bereit' : 'Lokale Suche';
   chatAiEnabled=Boolean(status.external_llm);
   $('send').disabled=chatBusy||!connected;
   if(status.llm_limited) $('connection').textContent='KI vorübergehend begrenzt · lokale Antworten';
@@ -63,7 +138,7 @@ async function refresh() {
   for(const item of events) {
     const el=document.createElement('details');el.className='event';el.dataset.eventId=String(item.id);el.open=opened.has(String(item.id));
     const summary=document.createElement('summary');
-    const icon=document.createElement('span');icon.className='event-icon';icon.textContent=item.item_id.startsWith('mail:')?'✉':'▤';
+    const icon=document.createElement('span');icon.className='event-icon';icon.append(iconNode(item.item_id.startsWith('mail:')?'mail':'sources'));
     const heading=document.createElement('div');heading.className='event-heading';
     const title=document.createElement('h3');title.textContent=item.title;
     const excerpt=document.createElement('p');excerpt.className='event-excerpt';excerpt.textContent=item.reason.replace(/\*\*/g,'').replace(/\s+/g,' ').slice(0,160);
@@ -81,8 +156,9 @@ async function restoreLogin() {
   notice('');
   // Restore saved connections before any optional status or source requests.
   await loadConnections();
-  const results=await Promise.allSettled([refresh(),api('context')]);
-  if(results[1].status==='fulfilled') $('context-json').value=JSON.stringify(results[1].value,null,2);
+  const results=await Promise.allSettled([refresh(),api('context'),loadConversations()]);
+  const remembered=localStorage.getItem('butler-conversation-id');if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))await openConversation(remembered);
+  if(results[1].status==='fulfilled') {$('context-json').value=JSON.stringify(results[1].value);renderContext();}
   if(results[0].status==='rejected') notice('Einstellungen geladen. Statusübersicht derzeit nicht verfügbar.');
 }
 $('connect').onclick = async () => {
@@ -92,27 +168,24 @@ $('connect').onclick = async () => {
   finally { $('connect').disabled=false; }
 };
 $('scan').onclick = async () => { $('scan').disabled = true; notice('Quellen werden geprüft …'); try { await api('scan',{method:'POST'}); notice('Prüfung abgeschlossen.'); await refresh(); } catch(e) { notice(e.message); } finally { $('scan').disabled = false; } };
-$('save').onclick = async () => { try { const value = JSON.parse($('context-json').value); await api('context',{method:'PUT',body:JSON.stringify(value)}); notice('Kontext lokal gespeichert.'); } catch(e) { notice(e.message); } };
+$('save').onclick = async () => { try { const value = JSON.parse($('context-json').value); if(value.projects.some(p=>!p.name.trim()||p.keywords.length>30||p.keywords.some(k=>k.length<2||k.length>100)))throw new Error('Bitte eine Bezeichnung und höchstens 30 Schlagwörter mit jeweils 2 bis 100 Zeichen eingeben.'); await api('context',{method:'PUT',body:JSON.stringify(value)}); contextDirty=false;notice('Kontext lokal gespeichert.'); } catch(e) { notice(e.message); } };
 $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
-  bubble(message,'user'); $('question').value = ''; chatBusy=true;$('send').disabled = true;
+  if(chatBusy)return;
+  bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
   try {
-    const result = await api('chat',{method:'POST',body:JSON.stringify({message,share_external:chatAiEnabled})});
-    progress.remove();const answerBubble=bubble(result.answer,'assistant');
-    const role=answerBubble.querySelector('.message-role');
-    role.textContent=result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
-    if(result.ai_issue){const status=document.createElement('small');status.className='answer-status';status.textContent='KI derzeit nicht verfügbar · lokale Ersatzantwort';status.title=result.ai_issue;answerBubble.append(status);}
-    if(result.sources?.length || result.diagnostics?.length) {
-      const evidence=document.createElement('button');evidence.type='button';evidence.className='evidence-link';evidence.textContent=result.sources?.length?'Belege ansehen ('+result.sources.length+') ↗':'Hinweise zur Suche ↗';evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answerBubble.append(evidence);
-    }
+    const result = await api('chat',{method:'POST',body:JSON.stringify({message,share_external:chatAiEnabled,conversation_id:conversationId})});
+    progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
+    if(conversationId)localStorage.setItem('butler-conversation-id',conversationId);
+    loadConversations().catch(()=>{});
     if ($('speak').checked && 'speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(result.answer); utterance.lang='de-DE';
       const voices = speechSynthesis.getVoices().filter(v=>v.localService && v.lang.startsWith('de'));
       if (voices.length) { utterance.voice=voices[0];utterance.onend=()=>{if(voiceConversation&&$('voice-send').checked)startLocalRecording();};utterance.onerror=()=>{voiceConversation=false;notice('Vorlesen ist nicht verfügbar.');};speechSynthesis.cancel();speechSynthesis.speak(utterance); }
       else {voiceConversation=false;notice('Keine lokale deutsche Stimme verfügbar. Vorlesen übersprungen.');}
     }
-  } catch(e) { voiceConversation=false;progress.remove();bubble('Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally { chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false'); }
+  } catch(e) { voiceConversation=false;progress.remove();bubble('Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally { chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');setMic(voiceConversation);loadConversations().catch(()=>{}); }
 };
 for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem('butler-'+id)!=='false';
@@ -134,17 +207,17 @@ async function startLocalRecording(){
     const timer=setInterval(()=>{analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((s,x)=>s+x*x,0)/samples.length);if(rms>0.015){lastVoice=performance.now();heard=true;}if((heard&&performance.now()-lastVoice>1800)||performance.now()-started>45000) recording.stop();},150);
     recording.ondataavailable=event=>{if(event.data.size)parts.push(event.data);};
     recording.onstop=async()=>{
-      clearInterval(timer);stream.getTracks().forEach(track=>track.stop());await context.close();recorder=null;$('mic').textContent='🎙';$('mic').setAttribute('aria-label','Sprachgespräch starten');
+      clearInterval(timer);stream.getTracks().forEach(track=>track.stop());await context.close();recorder=null;setMic(voiceConversation);
       if(!voiceConversation){return;}
       if(!heard){voiceConversation=false;return notice('Keine Sprache erkannt. Mikrofon erneut starten.');}
       notice('Ich höre zu Ende und erkenne deine Frage lokal …');
       try{const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream'},body:new Blob(parts,{type:recording.mimeType})});const result=await response.json();if(!response.ok)throw new Error(result.detail);if(!result.text)throw new Error('Keine Sprache erkannt.');$('question').value=result.text;notice('');if($('voice-send').checked&&!$('send').disabled)$('chat-form').requestSubmit();}
-      catch(e){voiceConversation=false;notice(e.message);}
+      catch(e){voiceConversation=false;setMic(false);notice(e.message);}
     };
-    recording.start();$('mic').textContent='■';$('mic').setAttribute('aria-label','Sprachgespräch beenden');notice('Ich höre zu · Verarbeitung auf deinem Butler-Rechner');
-  }catch(e){stream?.getTracks().forEach(track=>track.stop());voiceConversation=false;notice(e.message);}
+    recording.start();setMic(true);notice('Ich höre zu · Verarbeitung auf deinem Butler-Rechner');
+  }catch(e){stream?.getTracks().forEach(track=>track.stop());voiceConversation=false;setMic(false);notice(e.message);}
 }
-$('mic').onclick=()=>{if(voiceConversation){voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();notice('Sprachgespräch beendet.');return;}voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
+$('mic').onclick=()=>{if(voiceConversation){voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();setMic(false);notice('Sprachgespräch beendet.');return;}voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
 $('pair-phone').onclick=async()=>{try{const result=await api('session/pairing',{method:'POST'});$('pairing-info').textContent=result.url+' · Code: '+result.code+' · 10 Minuten gültig, einmal verwendbar.';}catch(e){$('pairing-info').textContent=e.message;}};
 $('pair-form').onsubmit=async event=>{event.preventDefault();try{await api('session/pair',{method:'POST',body:JSON.stringify({code:$('pair-code').value})});$('pair-dialog').close();$('pair-code').value='';await restoreLogin();}catch(e){$('pair-error').textContent=e.message;}};
 setInterval(() => { if (connected) refresh().catch(e=>notice(e.message)); },30000);
@@ -186,7 +259,7 @@ function option(select, value, text) {
 for (const service of services) {
   const card=document.createElement('article');card.className='connection-card';card.id='service-'+service.id;
   const heading=document.createElement('div');heading.className='connection-heading';
-  const icon=document.createElement('span');icon.className='service-icon';icon.textContent=service.icon;
+  const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',internet:'arrow'}[service.id]));
   const title=document.createElement('h3');title.textContent=service.title;heading.append(icon,title);card.append(heading);
   const description=document.createElement('p');description.textContent=service.description;card.append(description);
   const fieldset=document.createElement('fieldset');fieldset.id='fields-'+service.id;fieldset.disabled=true;
@@ -332,28 +405,46 @@ $('cfg-llm_provider').addEventListener('change',()=>{
 });
 
 const viewLabels={
-  chat:['GESPRÄCH','Was beschäftigt dich?','Frag deinen Butler. Er bringt deine Informationen zusammen.'],
-  findings:['FUNDSTÜCKE','Das ist für dich wichtig.','Relevante Hinweise aus deinen E-Mails und Dokumenten.'],
-  settings:['EINSTELLUNGEN','Ein Platz für deine Verbindungen.','Verwalte deine Dienste und erzähle deinem Butler, was dir wichtig ist.']
+  chat:['Gespräch','Deine Fragen. Dein Wissen.','Dein persönlicher Wissensraum.'],
+  sources:['Wissensquellen','Dein Wissen. Verbunden.','Die Grundlage für Antworten, die zu dir passen.'],
+  findings:['Fundstücke','Für dich gefunden.','Relevante Hinweise aus deinen E-Mails und Dokumenten.'],
+  settings:['Einstellungen','Dein Butler. Deine Verbindungen.','Verwalte deine Dienste und erzähle deinem Butler, was dir wichtig ist.']
 };
 function showView() {
   const hash=window.location.hash.slice(1);
-  const view=hash==='findings'?'findings':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
+  if(hash==='new-chat'){newConversation();return;}
+  const view=hash==='sources'?'sources':hash==='findings'?'findings':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
   for(const element of document.querySelectorAll('.page-view')) element.hidden=element.dataset.view!==view;
   for(const link of document.querySelectorAll('[data-nav]')) {
     if(link.dataset.nav===view) link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   }
+  document.body.dataset.view=view;
   const context=hash==='context';$('setup').hidden=context;$('context').hidden=!context;
   for(const tab of document.querySelectorAll('[data-settings-tab]')) tab.setAttribute('aria-selected',String(tab.dataset.settingsTab===(context?'context':'connections')));
   const [label,title,subtitle]=viewLabels[view];$('page-label').textContent=label;$('page-title').textContent=title;$('page-subtitle').textContent=subtitle;
-  document.title='Butler · '+{chat:'Gespräch',findings:'Fundstücke',settings:'Einstellungen'}[view];
+  document.title='Butler · '+{chat:'Gespräch',sources:'Wissensquellen',findings:'Fundstücke',settings:'Einstellungen'}[view];
   window.scrollTo({top:0,behavior:'instant'});
+  if(hash.startsWith('service-'))requestAnimationFrame(()=>$(hash)?.scrollIntoView({block:'start',behavior:'auto'}));
 }
 window.addEventListener('hashchange',showView);
-for(const button of document.querySelectorAll('[data-prompt]')) button.onclick=()=>{$('question').value=button.dataset.prompt;$('question').focus();};
+$('messages').addEventListener('click',event=>{const button=event.target.closest('[data-prompt]');if(button){$('question').value=button.dataset.prompt;autoSizeQuestion();$('question').focus();}});
 $('question').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled) $('chat-form').requestSubmit();}});
-showView();
+function autoSizeQuestion(){$('question').style.height='auto';$('question').style.height=Math.min($('question').scrollHeight,130)+'px';}
+$('question').addEventListener('input',autoSizeQuestion);
+$('new-chat').onclick=newConversation;$('header-new-chat').onclick=newConversation;
+$('show-history').onclick=()=>$('history-dialog').showModal();$('history-close').onclick=()=>$('history-dialog').close();
+document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();newConversation();}});
+let installPrompt=null;
+window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;});
+$('install-app').onclick=async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;}else $('install-dialog').showModal();};
+$('install-close').onclick=()=>$('install-dialog').close();
+window.addEventListener('online',()=>{notice('Wieder verbunden.');if(connected)refresh().then(()=>notice('')).catch(e=>notice(e.message));});
+function fitAppViewport(){document.documentElement.style.setProperty('--app-height',(window.visualViewport?.height||window.innerHeight)+'px');document.body.classList.toggle('keyboard-open',Boolean(window.visualViewport&&window.innerHeight-window.visualViewport.height>120&&document.activeElement?.id==='question'));}
+window.visualViewport?.addEventListener('resize',fitAppViewport);window.addEventListener('resize',fitAppViewport);$('question').addEventListener('focus',fitAppViewport);$('question').addEventListener('blur',fitAppViewport);fitAppViewport();
+window.addEventListener('offline',()=>notice('Du bist offline. Dein Butler ist wieder erreichbar, sobald die Verbindung steht.'));
+if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+welcome();showView();
 
 restoreLogin().catch(e=>{ notice(e.message);if(location.hostname!=='127.0.0.1'&&location.hostname!=='localhost') $('pair-dialog').showModal(); });
 
-window.addEventListener('beforeunload',event=>{ if(dirtyServices.size){event.preventDefault();event.returnValue='';} });
+window.addEventListener('beforeunload',event=>{ if(dirtyServices.size||contextDirty){event.preventDefault();event.returnValue='';} });
