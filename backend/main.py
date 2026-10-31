@@ -210,7 +210,20 @@ def create_app(settings=None):
         return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url)}}
     @app.get('/api/sync',dependencies=protected)
     async def sync_status():
-        return store.sync_overview()
+        import hashlib
+        from .notifications import history_urls
+        overview=store.sync_overview()
+        account=hashlib.sha256((s.imap_host+'/'+s.imap_user).encode()).hexdigest()[:16]
+        paperless_key='initial-paperless:'+hashlib.sha256(s.paperless_url.rstrip('/').encode()).hexdigest()[:16]
+        topic_keys={'ntfy:'+hashlib.sha256(url.encode()).hexdigest()[:20] for url in history_urls(s)}
+        overview['initial_import']={
+            'mail': [state for state in overview['states'] if state['key'].startswith('mail-archive:'+account+':')],
+            'paperless':store.sync_state(paperless_key),
+            'ntfy': [state for state in overview['states'] if state['key'] in topic_keys],
+            'ntfy_topics':len(topic_keys),
+            'mail_enabled':s.imap_archive_enabled,'ntfy_enabled':s.ntfy_history_enabled,
+        }
+        return overview
 
     @app.get('/api/context',dependencies=protected)
     async def context():

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import time
 import re
@@ -193,21 +194,39 @@ class Worker:
             self.status['running'] = True
             try:
                 for name, reader in [('paperless',lambda:read_paperless(self.s.model_copy())),('imap',lambda:asyncio.to_thread(read_mail,self.s.model_copy(),self.store.mail_ids()))]:
+                    progress_key='initial-paperless:'+hashlib.sha256(self.s.paperless_url.rstrip('/').encode()).hexdigest()[:16] if name=='paperless' else None
+                    initial_progress=bool(progress_key and not self.store.sync_state(progress_key).get('complete'))
+                    progress={'source':'paperless','phase':'fetching','indexed':0,'total':None,'complete':False}
                     try:
+                        if initial_progress:self.store.save_sync_state(progress_key,progress)
                         items = await reader()
+                        if initial_progress:
+                            progress.update(phase='indexing',total=len(items))
+                            self.store.save_sync_state(progress_key,progress)
                         errors = 0
                         baseline_key='baseline:'+name+':'+(items[0]['id'].rsplit(':',1)[0] if items else '')
                         initial=not self.store.notification_value(baseline_key)
-                        for item in items:
+                        for position,item in enumerate(items,1):
                             try:
                                 await self.process(item, notify=not initial)
                             except Exception:
                                 errors += 1
                                 log.warning('Item processing failed (%s); retry next poll', name)
+                            if initial_progress:
+                                progress.update(indexed=position-errors,errors=errors)
+                                if position%10==0:
+                                    self.store.save_sync_state(progress_key,progress)
+                                    await asyncio.sleep(0)
+                        if initial_progress:
+                            progress.update(complete=errors==0,phase='complete' if errors==0 else 'error')
+                            self.store.save_sync_state(progress_key,progress)
                         if errors==0:
                             self.store.set_notification_value(baseline_key,'1')
                         self.status['sources'][name] = {'fetched':len(items),'errors':errors}
                     except Exception:
+                        if initial_progress:
+                            progress.update(phase='error',error=True)
+                            self.store.save_sync_state(progress_key,progress)
                         self.status['sources'][name] = {'error':'Abruf fehlgeschlagen; Konfiguration/Verbindung prüfen'}
                         log.warning('Source fetch failed: %s', name)
                 await self.poll_iobroker()

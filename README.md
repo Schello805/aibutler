@@ -189,6 +189,8 @@ Unter **Einstellungen → Verbindungen** jeden Dienst einzeln speichern und test
 
 Fragen wie **„Welche Lichter sind gerade noch an?“** lesen Schalt- und Dimmzustände direkt aus der ioBroker-Simple-API. Diese klaren Statusfragen benötigen keinen KI-Aufruf und funktionieren auch bei einem Anfragelimit des KI-Anbieters. Die Antwort trägt „LIVE-ABFRAGE“; Zeitstempel und Belege stehen separat bereit. Raum-/Funktionszuordnungen und lesbare Gerätenamen dienen der Auswahl. Technische Statuswerte, Skript-Aktivierungen und Sensormessungen werden nicht als eingeschaltete Lampen gezählt. Nicht erreichbare oder unbestätigte Zustände bleiben unklar. Es werden keine Geräte geschaltet. Für diese direkte Lichtabfrage ist die Simple-API erforderlich; allgemeine REST-API-Snapshots ersetzen die vollständige Lichtzuordnung noch nicht.
 
+Während der erstmaligen Indexierung erscheint auch im Chat eine dezente Statusanzeige mit schmalen Balken für E-Mails, Paperless-Dokumente und ntfy-Verlauf. Bekannte Mengen werden als „erfasst / gesamt“ angezeigt; während der Bestandsaufnahme bleibt der Balken unbestimmt. Die Anzeige aktualisiert sich alle fünf Sekunden, zeigt Unterbrechungen oder pausierte Importe und verschwindet nach Abschluss automatisch. ioBroker liefert aktuelle Zustände bei passenden Fragen und hat keinen vollständigen rückwirkenden Datenbestand.
+
 **Wissensquellen** zeigt Mengen und Importfortschritt. Ein großer Mailbestand wird schrittweise und fortsetzbar eingelesen. Das ist kein sofort abgeschlossener Gesamtabruf. Rechnungen, alte E-Mails und bereits importierte Ereignisse sind anschließend lokal durchsuchbar. Zusätzliche passende Quellen werden bei Chatfragen lesend nachgeladen.
 
 ## 6. Später aktualisieren – ein Befehl

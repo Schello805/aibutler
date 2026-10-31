@@ -68,6 +68,34 @@ function renderSources(status,sync){
   $('source-progress').value=percent;$('archive-percent').textContent=total?percent+' %':'—';
   $('source-archive-status').textContent=total?indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' E-Mails aus '+archives.length+' Ordnern erfasst'+(archives.every(s=>s.complete)?' · Import vollständig':' · wird weiter eingelesen'):'Noch kein E-Mail-Archiv erfasst.';
 }
+function renderInitialImport(status,sync) {
+  const rows=[],configured=status.configured_sources||{},initial=sync.initial_import||{},paused=status.worker_enabled===false;
+  if(configured.imap){
+    const archives=initial.mail||[];
+    if(!archives.length||!archives.every(s=>s.complete)){
+      const total=archives.reduce((n,s)=>n+(s.total||0),0),indexed=archives.reduce((n,s)=>n+(s.indexed||0),0);
+      rows.push({name:'E-Mails',total:total||null,indexed,error:archives.some(s=>s.error||s.errors)||status.sources?.mail_archive?.error,disabled:paused||initial.mail_enabled===false});
+    }
+  }
+  if(configured.paperless){
+    const state=initial.paperless;
+    if(!state?.complete)rows.push({name:'Dokumente',total:state?.total,indexed:state?.indexed||0,disabled:paused,error:state?.error||state?.phase==='error'});
+  }
+  if(configured.ntfy){
+    const topics=initial.ntfy||[],complete=topics.length===initial.ntfy_topics&&topics.every(s=>!s.error&&s.checked);
+    if(!complete)rows.push({name:'Benachrichtigungen',total:null,indexed:sync.indexed.ntfy||0,disabled:paused||initial.ntfy_enabled===false,error:topics.some(s=>s.error)||status.sources?.ntfy_history?.error});
+  }
+  const panel=$('initial-import'),list=$('initial-import-rows');panel.hidden=!rows.length;list.replaceChildren();
+  for(const row of rows){
+    const line=node('div','initial-import-row'),heading=node('div','initial-import-label');
+    const count=row.total!=null?row.indexed.toLocaleString('de-DE')+' / '+row.total.toLocaleString('de-DE'):row.indexed?row.indexed.toLocaleString('de-DE')+' erfasst':'Bestand wird ermittelt';
+    heading.append(node('span','',row.name),node('span','',row.error?'Unterbrochen · erneuter Versuch folgt':row.disabled?'Import pausiert':count));
+    const bar=document.createElement('progress');bar.max=100;bar.setAttribute('aria-label',row.name+' indexieren');
+    if(row.total!=null)bar.value=row.total?Math.min(100,row.indexed/row.total*100):100;
+    if(row.error||row.disabled){bar.value=row.total?Math.min(99,row.indexed/row.total*100):0;line.classList.add('paused');}
+    line.append(heading,bar);list.append(line);
+  }
+}
 function validationMessage(details) {
   const labels={iobroker_url:'ioBroker-Adresse',iobroker_patterns:'Datenpunkt-Muster',iobroker_api:'API-Adapter'};
   if(!Array.isArray(details))return 'Bitte prüfe deine Eingaben.';
@@ -148,6 +176,7 @@ async function refresh() {
   $('archive-progress').textContent=archives.length?'E-Mail-Archiv: '+indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' Nachrichten in '+archives.length+' Ordnern erfasst'+(archives.every(state=>state.complete)?' · vollständig':' · wird weiter eingelesen'):'E-Mail-Archiv: Bestandsaufnahme wird vorbereitet.';
   $('source-counts').textContent=Object.entries(sync.indexed).map(([source,count])=>({imap:'E-Mails',paperless:'Dokumente',ntfy:'ntfy-Ereignisse'}[source]||source)+': '+count.toLocaleString('de-DE')).join(' · ');
   renderSources(status,sync);
+  renderInitialImport(status,sync);
   $('connection').textContent = status.external_llm ? 'Chat-KI bereit' : 'Lokale Suche';
   chatAiEnabled=Boolean(status.external_llm);
   $('send').disabled=chatBusy||!connected;
@@ -179,7 +208,7 @@ async function loadAccounts(){
 async function showLogin(message=''){
   const revision=++authRevision;connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();
-  $('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
+  $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
   $('messages').replaceChildren();$('events').replaceChildren();$('evidence-content').replaceChildren();$('account-list').replaceChildren();$('conversation-list').replaceChildren();$('mobile-conversation-list').replaceChildren();$('context-projects').replaceChildren();
   for(const input of document.querySelectorAll('#app-shell input,#app-shell textarea'))if(input.type!=='checkbox')input.value='';
@@ -279,7 +308,11 @@ async function startLocalRecording(){
   }catch(e){stream?.getTracks().forEach(track=>track.stop());if(!stillCurrent())return;voiceConversation=false;setMic(false);notice(e.message);}
 }
 $('mic').onclick=()=>{if(voiceConversation){voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();setMic(false);notice('Sprachgespräch beendet.');return;}voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
-setInterval(() => { if (connected) refresh().catch(e=>notice(e.message)); },30000);
+async function pollStatus(){
+  try {if(connected)await refresh();}catch(e){if(connected)notice(e.message);}
+  finally {setTimeout(pollStatus,$('initial-import').hidden?30000:5000);}
+}
+setTimeout(pollStatus,5000);
 
 
 const services = [

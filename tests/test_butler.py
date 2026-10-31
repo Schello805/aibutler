@@ -788,3 +788,36 @@ def test_iobroker_connection_validation_preserves_saved_configuration(tmp_path):
         assert client.put('/api/connections/iobroker',json={'iobroker_url':'http://home:8087/','iobroker_api':'simple','iobroker_patterns':'*.connected,*.UNREACH','iobroker_enabled':True}).status_code==200
         assert settings.iobroker_url=='http://home:8087'
         assert settings.iobroker_enabled
+
+
+def test_initial_document_progress_persists_and_retries_errors(tmp_path,monkeypatch):
+    import hashlib
+    from backend import worker as module
+    settings=Settings(_env_file=None,data_dir=tmp_path,worker_enabled=False,paperless_url='https://docs.example',api_token='test')
+    store=Store(tmp_path);worker=Worker(settings,store)
+    key='initial-paperless:'+hashlib.sha256(settings.paperless_url.encode()).hexdigest()[:16]
+    async def docs(_):
+        assert store.sync_state(key)['phase']=='fetching'
+        return [{**item(),'id':'doc-1'},{**item(),'id':'doc-2'}]
+    monkeypatch.setattr(module,'read_paperless',docs)
+    monkeypatch.setattr(module,'read_mail',lambda *_:[])
+    original=worker.process
+    async def fail_one(value,**kwargs):
+        assert store.sync_state(key)['total']==2
+        if value['id']=='doc-2':raise RuntimeError('retry')
+        await original(value,**kwargs)
+    monkeypatch.setattr(worker,'process',fail_one)
+    asyncio.run(worker.tick())
+    state=store.sync_state(key)
+    assert state['indexed']==1 and state['total']==2 and not state['complete'] and state['phase']=='error'
+    monkeypatch.setattr(worker,'process',original)
+    asyncio.run(worker.tick())
+    assert store.sync_state(key)['complete']
+    with TestClient(create_app(settings)) as client:
+        sync=client.get('/api/sync',headers={'Authorization':'Bearer test'}).json()
+        assert sync['initial_import']['paperless']['complete']
+        assert sync['initial_import']['paperless']['indexed']==2
+    # Another Paperless instance must not inherit the previous instance's completion.
+    settings.paperless_url='https://other.example'
+    with TestClient(create_app(settings)) as client:
+        assert client.get('/api/sync',headers={'Authorization':'Bearer test'}).json()['initial_import']['paperless']=={}
