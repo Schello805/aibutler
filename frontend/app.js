@@ -68,10 +68,22 @@ function renderSources(status,sync){
   $('source-progress').value=percent;$('archive-percent').textContent=total?percent+' %':'—';
   $('source-archive-status').textContent=total?indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' E-Mails aus '+archives.length+' Ordnern erfasst'+(archives.every(s=>s.complete)?' · Import vollständig':' · wird weiter eingelesen'):'Noch kein E-Mail-Archiv erfasst.';
 }
+function validationMessage(details) {
+  const labels={iobroker_url:'ioBroker-Adresse',iobroker_patterns:'Datenpunkt-Muster',iobroker_api:'API-Adapter'};
+  if(!Array.isArray(details))return 'Bitte prüfe deine Eingaben.';
+  const messages=details.map(error=>{
+    const field=error.loc?.at(-1),label=labels[field]||'Eingabe';
+    if(field==='iobroker_url')return label+': vollständige API-Adresse mit http:// oder https:// verwenden, ohne Zugangsdaten oder URL-Parameter.';
+    if(field==='iobroker_patterns')return label+': ein bis zehn Muster angeben, mit Komma oder Zeilenumbruch getrennt.';
+    if(field==='iobroker_api')return label+': Simple-API oder REST-API auswählen.';
+    return label+': ungültiger Wert. Bitte prüfen.';
+  });
+  return [...new Set(messages)].join(' ')||'Bitte prüfe deine Eingaben.';
+}
 async function api(path, options = {}) {
   const revision=authRevision;
   const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
-  if (!response.ok) { if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.'); const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : response.status===422?'Bitte prüfe deine Eingaben.':'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
+  if (!response.ok) { if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.'); const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : response.status===422?validationMessage(body.detail):'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
   return response.json();
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
@@ -346,7 +358,7 @@ for (const service of services) {
     const link=document.createElement('a');link.href='https://ai.google.dev/gemini-api/terms';link.target='_blank';link.rel='noopener';link.textContent='Gemini-Datenbedingungen';hint.append(link);fieldset.append(hint);
   }
   if(service.id==='iobroker') {
-    const hint=document.createElement('p');hint.className='hint';hint.textContent='Standardmäßig werden connected, reachable, online und UNREACH geprüft. Optional prüft *.alive den Adapterbetrieb, nicht zwingend ein Gerät. Zusätzliche Muster wie zigbee.0.*.temperature liefern Messwerte. Ein ausgeschaltetes Licht gilt nicht als offline. Die Werte dienen der KI als Fragekontext. Es werden keine Zustandslisten oder einzelnen Statusmeldungen in der Oberfläche ausgegeben.';fieldset.append(hint);
+    const hint=document.createElement('p');hint.className='hint';hint.textContent='Die Admin-Oberfläche (meist Port 8081) ist keine Zustands-API. Nutze den installierten Simple-API- oder REST-API-Adapter mit seinem konfigurierten Port. Leere Datenpunkt-Muster verwenden die Standardwerte connected, reachable, online und UNREACH. Optional prüft *.alive den Adapterbetrieb, nicht zwingend ein Gerät. Zusätzliche Muster wie zigbee.0.*.temperature liefern Messwerte. Ein ausgeschaltetes Licht gilt nicht als offline. Die Werte dienen der KI als Fragekontext. Es werden keine Zustandslisten oder einzelnen Statusmeldungen in der Oberfläche ausgegeben.';fieldset.append(hint);
   }
   const actions=document.createElement('div');actions.className='service-actions';
   if(service.fields.length) {
@@ -398,6 +410,7 @@ async function saveService(service,button) {
       if(type==='minutes') config[key]=Number(value)*60;
       else if(type==='checkbox') config[key]=input.checked;
       else if(type==='password') { if(value) config[key]=input.value; }
+      else if(key==='iobroker_patterns')config[key]=value||'*.connected,*.reachable,*.online,*.UNREACH';
       else config[key]=type==='number'?Number(value):value;
     }
     if(service.id==='llm') for(const key of ['chat_llm_enabled','allow_external_llm','gemini_paid_confirmed']) config[key]=$('cfg-'+key).checked;

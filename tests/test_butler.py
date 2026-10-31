@@ -767,3 +767,24 @@ def test_follow_up_passes_recent_conversation_to_planner_and_answer(tmp_path,mon
         assert len(payloads[1]['conversation'])==2
         assert 'Aktuelle Frage: In welchem Jahr?' in planned[1]
         assert second['conversation_id']==first['conversation_id']
+
+
+def test_iobroker_connection_validation_preserves_saved_configuration(tmp_path):
+    from backend.connections import connection_router
+    settings=Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,iobroker_url='http://home:8087')
+    # Use a temporary settings file rather than the real deployment credentials.
+    from fastapi import FastAPI
+    isolated=FastAPI()
+    async def auth(): pass
+    isolated.include_router(connection_router(settings,Worker(settings,Store(tmp_path)),auth,tmp_path/'.env'))
+    with TestClient(isolated) as client:
+        response=client.put('/api/connections/iobroker',json={'iobroker_url':'192.168.1.126:8087'})
+        assert response.status_code==422
+        assert response.json()['detail'][0]['loc'][-1]=='iobroker_url'
+        assert settings.iobroker_url=='http://home:8087'
+        response=client.put('/api/connections/iobroker',json={'iobroker_patterns':','.join('pattern'+str(n) for n in range(11))})
+        assert response.status_code==422
+        assert response.json()['detail'][0]['loc'][-1]=='iobroker_patterns'
+        assert client.put('/api/connections/iobroker',json={'iobroker_url':'http://home:8087/','iobroker_api':'simple','iobroker_patterns':'*.connected,*.UNREACH','iobroker_enabled':True}).status_code==200
+        assert settings.iobroker_url=='http://home:8087'
+        assert settings.iobroker_enabled
