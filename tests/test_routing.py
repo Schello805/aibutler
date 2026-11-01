@@ -87,3 +87,26 @@ def test_research_deadline_returns_saved_failure(tmp_path,monkeypatch):
         assert result['interrupted'] and '180 Sekunden' in result['answer']
         state=client.get('/api/chat/result/'+'f'*32,headers={'Authorization':'Bearer test'}).json()
         assert state['status']=='failed' and state['result']['interrupted']
+
+
+def test_first_day_advice_uses_supplied_context_not_connections(tmp_path,monkeypatch):
+    question='Morgen starte ich meinen neuen Job bei Sielaff in Herrieden. Sollte ich an etwas denken?'
+    assert route_question(question)['kind']=='general'
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,chat_llm_enabled=True))
+    called=[]
+    async def forbidden(*args,**kwargs):raise AssertionError('No research for first-day advice')
+    async def answer(settings,task,payload):
+        called.append('answer');assert payload['question']==question
+        assert 'Keine persönlichen Quellen wurden durchsucht' in task
+        return 'Bestätige Startzeit und Treffpunkt und plane deine Anfahrt mit Puffer.'
+    monkeypatch.setattr('backend.main.generate',answer);monkeypatch.setattr('backend.main.plan_question',forbidden)
+    for name in ('search_mail_context','search_document_context','poll_ntfy','search_context'):
+        monkeypatch.setattr(app.state.worker,name,forbidden)
+    with TestClient(app) as client:
+        result=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':question,'share_external':True}).json()
+        assert result['external_used'] and result['route']=='general' and called==['answer']
+        assert result['sources']==[]
+        without_ai=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':question}).json()
+        assert 'ersten Tag' in without_ai['answer'] and not without_ai['external_used']
+    specific=route_question('Morgen ist mein erster Arbeitstag. Prüfe meine E-Mails zur Einladung. Was sollte ich beachten?')
+    assert specific['kind']=='sources' and 'email' in specific['plan'].sources
