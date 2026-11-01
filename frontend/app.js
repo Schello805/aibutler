@@ -24,7 +24,8 @@ function voiceState(state,message){
 function setMic(active){if(!active)voiceState('idle');}
 function answerBubble(result){
   const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
-  const answer=bubble(text,'assistant');
+  const answer=bubble(text,'assistant',result.answered_at||result.created);
+  if(Number.isFinite(result.duration_seconds)&&result.duration_seconds>=0&&!result.pending){const duration=node('span','message-duration',' · '+result.duration_seconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s');duration.title='Bearbeitungsdauer auf dem Butler-Server';answer.querySelector('.message-meta').append(duration);}
   answer.querySelector('.message-role').textContent=result.pending?'BUTLER · WIRD BEARBEITET':result.interrupted?'BUTLER · UNTERBROCHEN':result.answer_mode==='live'?'BUTLER · LIVE-ABFRAGE':result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
   if(result.ai_issue){const status=node('small','answer-status',result.ai_issue.includes('429')?'KI-Anfragelimit erreicht · lokale Antwort':'KI-Auswertung nicht verfügbar · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
   if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
@@ -46,7 +47,7 @@ async function loadConversations(){
 }
 async function openConversation(id){
   if(chatBusy)return;const actor=currentUser?.id,revision=authRevision,turn=++conversationRevision;if(!actor)return;
-  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor||revision!==authRevision||turn!==conversationRevision||chatBusy)return;stopVoice();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
+  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor||revision!==authRevision||turn!==conversationRevision||chatBusy)return;stopVoice();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user',message.created);else answerBubble({...message.payload,answer:message.text,created:message.created});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
   catch(e){notice(e.message);}
 }
 function newConversation(){
@@ -172,11 +173,14 @@ function formattedText(element,text) {
     else element.append(document.createTextNode(part));
   }
 }
-function bubble(text, role) {
+function bubble(text, role, stamp=new Date().toISOString()) {
   $('messages').querySelector('.welcome')?.remove();
   const el=document.createElement('div');el.className='bubble '+role;
   const label=document.createElement('span');label.className='message-role';label.textContent=role==='user'?'DU':'BUTLER';
   const content=document.createElement('div');content.className='bubble-content';formattedText(content,text);el.append(label,content);
+  const meta=node('div','message-meta');
+  if(stamp){const parsed=new Date(/^\d{4}-\d{2}-\d{2} \d{2}:/.test(stamp)?stamp.replace(' ','T')+'Z':stamp);if(!Number.isNaN(parsed.getTime())){const time=document.createElement('time');time.dateTime=parsed.toISOString();time.textContent=parsed.toLocaleString('de-DE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});time.title=parsed.toLocaleString('de-DE',{dateStyle:'full',timeStyle:'long'});meta.append(time);}}
+  el.append(meta);
   $('messages').append(el);$('messages').scrollTop=$('messages').scrollHeight;
   return el;
 }

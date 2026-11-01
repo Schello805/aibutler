@@ -420,7 +420,7 @@ class Store:
             db.execute('BEGIN IMMEDIATE')
             turn=db.execute('SELECT * FROM chat_turns WHERE owner=? AND request_id=?',(owner_id or '',request_id)).fetchone() if request_id else None
             if turn:
-                db.execute('UPDATE conversation_messages SET text=?,payload=? WHERE id=?',(result['answer'],json.dumps(result,ensure_ascii=False),turn['assistant_message_id']))
+                db.execute('UPDATE conversation_messages SET text=?,payload=?,created=CURRENT_TIMESTAMP WHERE id=?',(result['answer'],json.dumps(result,ensure_ascii=False),turn['assistant_message_id']))
                 db.execute("UPDATE chat_turns SET status='done' WHERE owner=? AND request_id=?",(owner_id or '',request_id))
                 db.execute('UPDATE conversations SET updated=CURRENT_TIMESTAMP WHERE id=?',(turn['conversation_id'],))
                 return turn['conversation_id']

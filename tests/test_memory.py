@@ -201,3 +201,18 @@ def test_independent_preferences_do_not_replace_each_other(tmp_path):
     assert new['status']=='pending'
     memory.confirm('a',new['id'])
     assert memory.get('a',favorite['id'])['status']=='superseded'
+
+
+def test_answer_timing_survives_history_and_duplicate_request(tmp_path,monkeypatch):
+    from datetime import datetime
+    app=setup(tmp_path,monkeypatch)
+    with TestClient(app,base_url='https://testserver') as client:
+        result=chat(client,'Merk dir: Ich bevorzuge kurze Antworten.',request_id='c'*32)
+        assert result['duration_seconds']>=0
+        assert datetime.fromisoformat(result['answered_at']).tzinfo is not None
+        history=client.get('/api/conversations/'+result['conversation_id'],headers=headers()).json()['messages']
+        assert history[0]['created']
+        assert history[-1]['payload']['answered_at']==result['answered_at']
+        assert history[-1]['payload']['duration_seconds']==result['duration_seconds']
+        replay=chat(client,'Merk dir: Ich bevorzuge kurze Antworten.',conversation_id=result['conversation_id'],request_id='c'*32)
+        assert replay['answered_at']==result['answered_at']

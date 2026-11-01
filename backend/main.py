@@ -359,6 +359,10 @@ def create_app(settings=None):
             active_chats.pop(key,None)
 
     async def answer_chat(value:Chat,request:Request):
+        started=time.monotonic()
+        def timed(result):
+            result.update(answered_at=datetime.now(ZoneInfo('UTC')).isoformat(),duration_seconds=round(time.monotonic()-started,3))
+            return result
         owner_id=user_owner(request)
         previous=store.conversation(value.conversation_id,owner_id) if value.conversation_id else None
         if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
@@ -375,7 +379,7 @@ def create_app(settings=None):
         last=(previous['messages'][-1].get('payload') or {}) if previous and previous['messages'] else {}
         memory_reply=await asyncio.to_thread(memories.chat,owner_id,input_message,value.conversation_id,last)
         if memory_reply:
-            memory_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,memory_reply,owner_id,request_id=value.request_id)
+            memory_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(memory_reply),owner_id,request_id=value.request_id)
             return memory_reply
         pending=last.get('pending_question') if last.get('clarification')=='location' else None
         if pending and value.device_location is None and len(value.message)<=80 and re.fullmatch(r"[\w\s,().'-]+",value.message) and not re.match(r'^(wer|was|wann|warum|wie|welche|wo|kann|ist|hat|gibt)\b',value.message,re.I):
@@ -387,7 +391,7 @@ def create_app(settings=None):
             else:
                 question='Die Ortssuche ist gerade nicht erreichbar. Möchtest du es später erneut versuchen?' if places is None else 'Welchen Ort meinst du genau? Bitte nenne Ort und Bundesland.'
                 result={'answer':question,'clarification':'location','pending_question':pending,'sources':[],'diagnostics':[],'external_used':False,'answer_mode':'local','ai_issue':None,'query_planned_by_ai':False}
-                result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
+                result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
                 return result
         history=[{'role':message['role'],'text':'[Zugangsdaten werden nicht an die KI übertragen]' if memory_sensitive(message['text']) else message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
         remembered=await asyncio.to_thread(memories.retrieve,owner_id,value.message)
@@ -401,7 +405,7 @@ def create_app(settings=None):
             diagnostics.append('Direkte, rein lesende ioBroker-Abfrage. Angezeigt wird der zuletzt vom Gerät gemeldete Zustand; kein KI-Anbieter wurde für diese Frage aufgerufen.')
             if lighting.get('truncated'):diagnostics.append('Die Abfrage wurde auf 300 Licht-Schaltpunkte begrenzt; weitere Lichtpunkte können fehlen.')
             result={'answer':light_answer(value.message,lighting),'sources':sources,'diagnostics':diagnostics,'external_used':False,'answer_mode':'live' if lighting.get('fresh') else 'local','query_kind':'lighting','ai_issue':None,'query_planned_by_ai':False}
-            result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
+            result['conversation_id']=store.save_exchange(value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
             return result
         weather_needed,holidays_needed=needs_public_context(value.message,history)
         location_missing=weather_needed and s.weather_enabled and value.device_location is None
@@ -409,7 +413,7 @@ def create_app(settings=None):
         if location_missing or region_missing:
             question='Für welchen Ort und welches Bundesland soll ich das prüfen?' if region_missing else 'Für welchen Ort soll ich das Wetter prüfen?'
             result={'answer':question,'clarification':'location','pending_question':value.message,'sources':[],'diagnostics':[],'external_used':False,'answer_mode':'local','ai_issue':None,'query_planned_by_ai':False}
-            result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
+            result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
             return result
         display_zone=value.device_location.timezone if value.device_location else 'Europe/Berlin'
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
@@ -605,7 +609,7 @@ def create_app(settings=None):
         if proposal:
             result['memory_proposal']=proposal
             result['answer']+='\n\nSoll ich mir das für spätere Gespräche merken?'
-        result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
+        result['conversation_id']=store.save_exchange(value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
         return result
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])
