@@ -89,24 +89,42 @@ def test_research_deadline_returns_saved_failure(tmp_path,monkeypatch):
         assert state['status']=='failed' and state['result']['interrupted']
 
 
-def test_first_day_advice_uses_supplied_context_not_connections(tmp_path,monkeypatch):
+def test_first_day_preparation_combines_employer_contract_and_hr_mail(tmp_path,monkeypatch):
     question='Morgen starte ich meinen neuen Job bei Sielaff in Herrieden. Sollte ich an etwas denken?'
-    assert route_question(question)['kind']=='general'
+    route=route_question(question)
+    assert route['kind']=='sources' and set(route['plan'].sources)=={'email','paperless'}
+    assert route['job_context']['company']=='Sielaff'
     app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,chat_llm_enabled=True))
+    rows=[('contract','paperless','Arbeitsvertrag Sielaff','Sielaff Arbeitsvertrag: Arbeitsbeginn am 02.11.2026.'),('hr','imap','Willkommen bei Sielaff','Sielaff Personalabteilung: Bitte am ersten Arbeitstag um 8:00 Uhr am Empfang melden und Ausweis mitbringen.'),('old','paperless','Arbeitsvertrag andere Firma','Arbeitsbeginn bei anderer Firma im Jahr 2020.'),('ad','imap','Indeed Job Alert Sielaff','Sielaff Arbeitsbeginn Personalabteilung Stellenanzeigen')]
+    for identifier,source,title,body in rows:app.state.store.commit_item({'id':identifier,'version':'1','source':source,'title':title,'body':body})
     called=[]
-    async def forbidden(*args,**kwargs):raise AssertionError('No research for first-day advice')
+    async def forbidden(*args,**kwargs):raise AssertionError('No unrelated connection or live waiting with strong indexed evidence')
     async def answer(settings,task,payload):
         called.append('answer');assert payload['question']==question
-        assert 'Keine persönlichen Quellen wurden durchsucht' in task
-        return 'Bestätige Startzeit und Treffpunkt und plane deine Anfahrt mit Puffer.'
+        assert {row['item_id'] for row in payload['sources']}=={'contract','hr'}
+        assert 'Arbeitsvertrag und persönliche Personalabteilungs-' in task
+        return 'Dein Vertrag nennt den 02.11.2026 als Beginn. Laut Personalabteilung sollst du um 8 Uhr am Empfang sein und einen Ausweis mitbringen.'
     monkeypatch.setattr('backend.main.generate',answer);monkeypatch.setattr('backend.main.plan_question',forbidden)
-    for name in ('search_mail_context','search_document_context','poll_ntfy','search_context'):
+    for name in ('search_mail_context','search_document_context','poll_ntfy','search_context','relevant_smart_states'):
         monkeypatch.setattr(app.state.worker,name,forbidden)
+    monkeypatch.setattr(app.state.worker.personal,'context',forbidden)
     with TestClient(app) as client:
         result=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':question,'share_external':True}).json()
-        assert result['external_used'] and result['route']=='general' and called==['answer']
-        assert result['sources']==[]
-        without_ai=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':question}).json()
-        assert 'ersten Tag' in without_ai['answer'] and not without_ai['external_used']
-    specific=route_question('Morgen ist mein erster Arbeitstag. Prüfe meine E-Mails zur Einladung. Was sollte ich beachten?')
-    assert specific['kind']=='sources' and 'email' in specific['plan'].sources
+        assert result['external_used'] and called==['answer'] and result['retrieval_mode']=='indexed'
+        assert len(result['sources'])==2 and '8 Uhr' in result['answer']
+    assert route_question('Morgen starte ich meinen neuen Job. Sollte ich etwas beachten?')['kind']=='clarify'
+
+
+def test_job_mail_search_combines_company_and_onboarding_terms(tmp_path,monkeypatch):
+    import asyncio
+    from backend.worker import Worker
+    from backend.store import Store
+    settings=Settings(_env_file=None,data_dir=tmp_path,imap_host='mail.example')
+    worker=Worker(settings,Store(tmp_path));terms=[]
+    def search(settings,groups,known):
+        terms.extend(groups)
+        return {'items':[],'limited':False,'total':0}
+    monkeypatch.setattr('backend.worker.search_mail',search)
+    question='Morgen starte ich meinen neuen Job bei Sielaff in Herrieden. Sollte ich etwas beachten?'
+    result=asyncio.run(worker.search_mail_context(question,queries=route_question(question)['plan'].queries))
+    assert result['ok'] and terms[0]==['Sielaff'] and 'Personalabteilung' in terms[1]

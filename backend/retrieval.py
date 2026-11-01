@@ -180,6 +180,13 @@ def local_answer(question, hits, unavailable):
 
 def evidence_excerpt(body,query,matched=''):
     text=message_text(body)
+    if re.search(r'arbeitsbeginn|personalabteilung|onboarding|jobstart',query,re.I) and len(text)>3500:
+        snippets=[text[:600]];ends=[600]
+        for match in re.finditer(r'arbeitsbeginn|vertragsbeginn|erste[nr]? arbeitstag|mitbringen|treffpunkt|ansprechpartner|\d{1,2}[:.]\d{2}\s*uhr',text,re.I):
+            if any(abs(match.start()-end)<350 for end in ends):continue
+            start=max(0,match.start()-150);snippets.append(text[start:start+650]);ends.append(start+650)
+            if len(snippets)>=5:break
+        return '\n[… relevanter Abschnitt …]\n'.join(snippets)
     if len(text)<=10000:return text
     position=text.find(message_text(matched).strip()[:100]) if matched else 0
     if re.search(r'wartung|service|gewartet',query,re.I):
@@ -190,11 +197,29 @@ def evidence_excerpt(body,query,matched=''):
     return text[:2000]+'\n[… weiterer Dokumentauszug …]\n'+text[start:start+7900]
 
 
+def job_start_context(question):
+    lower=question.casefold()
+    advice=bool(re.search(r'sollte ich.{0,35}(?:denken|beachten|mitnehmen)|worauf soll(?:te)? ich achten|hast du.{0,15}tipps|was.{0,20}(?:vorbereiten|beachten)',lower))
+    new_job=bool(re.search(r'neue[nmrs]?\s+(?:job|stelle|arbeit)|erster.{0,8}arbeitstag|arbeitsbeginn|jobstart',lower))
+    if not (advice and new_job):return None
+    match=re.search(r'\bbei\s+(.{2,80}?)(?=\s+in\b|[.!?]|$)',question,re.I)
+    company=match[1].strip() if match else ''
+    if re.match(r'mein|dein|einem|einer',company,re.I):company=''
+    return {'company':company}
+
+
 def license_question(question):
     return bool(re.search(r'führerschein|fuehrerschein|fahrerlaubnis',question,re.I))
 
 
 def relevant_evidence(question,title,body):
+    job=job_start_context(question)
+    if job:
+        if re.search(r'newsletter|job alert|indeed|weitere.{0,15}jobs|stellenanzeigen|ratgeber',title,re.I):return False
+        text=' '.join((title+' '+body).casefold().split())
+        if job['company'] and ' '.join(job['company'].casefold().split()) not in text:return False
+        return bool(re.search(r'arbeitsvertrag|vertragsbeginn|arbeitsbeginn|arbeitsantritt|eintritt|personal|human resources|onboarding|willkommen|erste[nr]? arbeitstag|treffpunkt',text,re.I))
+
     if license_question(question):
         if re.search(r'newsletter|ratgeber|reform|versicherung|angebot|rechnung|jobs?|handbuch|anleitung',title,re.I):return False
         return bool(re.search(r'führerschein|fuehrerschein|fahrerlaubnis|prüfungsbescheinigung',title,re.I))

@@ -8,7 +8,7 @@ import httpx
 from .smarthome import read_iobroker, scope, utc_now, relevant_states
 from .sources import read_mail, read_paperless, search_mail, search_sender_mail, search_paperless
 from .intelligence import local_decision, generate,provider_is_limited
-from .retrieval import question_sender
+from .retrieval import question_sender,job_start_context
 from .archive import backfill_batch
 from .notifications import sync_ntfy
 from .icloud import PersonalSources
@@ -67,6 +67,8 @@ class Worker:
                     result=await asyncio.wait_for(asyncio.to_thread(search_sender_mail,settings,sender,self.store.mail_metadata_ids()),timeout=45)
                 else:
                     terms=list(dict.fromkeys(word for query in queries or [] for word in re.findall(r'\w{3,}',query)))[:8] if queries else [['heiz','therme'],['wart','service']]
+                    job=job_start_context(question)
+                    if job and job['company']:terms=[[job['company']],['Arbeitsvertrag','Arbeitsbeginn','Arbeitstag','Personalabteilung','Onboarding','Willkommen']]
                     result=await asyncio.wait_for(asyncio.to_thread(search_mail,settings,terms or [['heiz','therme'],['wart','service']],self.store.mail_ids()),timeout=45)
                 for item in result['items']:
                     self.store.commit_item(item)

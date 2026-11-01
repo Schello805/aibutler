@@ -34,10 +34,14 @@ def route_question(question,last=None):
         sources=['smart_home','paperless'] if scope=='device' else ['paperless','smart_home'] if scope=='usage' else ['email','paperless']
         queries=['Strom Abschlag Vorauszahlung'] if scope=='advance' else ['Strom Arbeitspreis Grundpreis','Strom Preisänderung Tarif'] if scope=='tariff' else [enriched[:200],'Strom Arbeitspreis Tarif']
         return {'kind':'sources','message':enriched,'plan':RetrievalPlan(intent='smart_home' if scope=='device' else 'documents',queries=queries,sources=sources,recent=True,smart_queries=[enriched[:200]] if 'smart_home' in sources else [])}
-    advice=bool(re.search(r'sollte ich.{0,35}(?:denken|beachten|mitnehmen)|worauf soll(?:te)? ich achten|hast du.{0,15}tipps|was.{0,20}(?:vorbereiten|beachten)',lower))
-    new_job=bool(re.search(r'neue[nmrs]?\s+(?:job|stelle|arbeit)|erster.{0,8}arbeitstag|arbeitsbeginn|jobstart',lower))
-    if advice and new_job and not re.search(r'e-?mail|postfach|dokument|kalender|einladung|nachricht|prüfe|pruefe|schau nach',lower):
-        return {'kind':'general','advice':True,'fallback':'Für deinen ersten Tag: Bestätige Startzeit, Ansprechpartner und Treffpunkt, plane die Anfahrt mit Puffer und lege die vereinbarten Unterlagen bereit. Frag nach, ob du besondere Kleidung oder Ausrüstung mitbringen sollst.'}
+    from .retrieval import job_start_context
+    job=job_start_context(text)
+    if job:
+        if not job['company']:
+            return {'kind':'clarify','clarification':'source_scope','answer':'Bei welchem Arbeitgeber startest du? Dann prüfe ich den passenden Arbeitsvertrag und die E-Mails zum ersten Arbeitstag.'}
+        company=job['company']
+        queries=[(company+' Arbeitsvertrag').strip(),(company+' Onboarding').strip(),(company+' Personalabteilung Arbeitsbeginn Arbeitstag Willkommen').strip()]
+        return {'kind':'sources','message':text,'job_context':job,'plan':RetrievalPlan(queries=queries,sources=['email','paperless'],recent=True)}
     from .retrieval import license_question
     if license_question(text):return {'kind':'sources','message':text,'plan':RetrievalPlan(queries=['Führerschein','Fahrerlaubnis'],sources=['paperless'])}
     sources=[]
