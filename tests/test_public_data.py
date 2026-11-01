@@ -252,3 +252,17 @@ def test_holidays_fallback_v3_preserves_regional_filter(tmp_path,monkeypatch):
     berlin=asyncio.run(provider.holidays(DeviceLocation(**{**LOCATION,'subdivision':'DE-BE'}),date(2026,11,1)))
     assert berlin['holidays']==[]
     assert calls==['https://nagerholidays.com/api/v4/Holidays/DE/2026','https://date.nager.at/api/v3/PublicHolidays/2026/DE']
+
+
+@pytest.mark.parametrize('query',['91572 Bechhofen','Bechhofen 91572','D-91572 Bechhofen, Bayern'])
+def test_location_combined_postcode_and_city(tmp_path,monkeypatch,query):
+    _,provider=make(tmp_path)
+    async def get(url,params=None):
+        assert params['name']=='Bechhofen'
+        return {'results':[
+            {'name':'Bechhofen','country_code':'DE','admin1':'Rheinland-Pfalz','latitude':49.35,'longitude':7.4,'postcodes':['66894']},
+            {'name':'Bechhofen','country_code':'DE','admin1':'Bayern','latitude':49.15,'longitude':10.55,'postcodes':['91572']}]}
+    monkeypatch.setattr(provider,'get_json',get)
+    result=asyncio.run(provider.locations(query))
+    assert len(result)==1
+    assert result[0]['subdivision']=='DE-BY'

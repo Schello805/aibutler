@@ -114,16 +114,22 @@ class PublicData:
 
     async def locations(self,query):
         city,separator,region_hint=query.partition(',');city=city.strip();region_hint=region_hint.strip().casefold()
+        postal=re.fullmatch(r'(?:D-)?(\d{5})\s+(.+)|(.+?)\s+(\d{5})',city,re.I)
+        postcode=''
+        if postal:
+            postcode=postal.group(1) or postal.group(4)
+            city=(postal.group(2) or postal.group(3)).strip()
         async def fetch():
-            raw=await self.get_json('https://geocoding-api.open-meteo.com/v1/search',{'name':city,'count':5,'language':'de','format':'json'})
+            raw=await self.get_json('https://geocoding-api.open-meteo.com/v1/search',{'name':city,'count':20 if postcode else 5,'language':'de','format':'json'})
             german={'Freistaat Bayern':'DE-BY','Bayern':'DE-BY','Bavaria':'DE-BY','Baden-Württemberg':'DE-BW','Berlin':'DE-BE','Brandenburg':'DE-BB','Bremen':'DE-HB','Hamburg':'DE-HH','Hessen':'DE-HE','Hesse':'DE-HE','Mecklenburg-Vorpommern':'DE-MV','Niedersachsen':'DE-NI','Lower Saxony':'DE-NI','Nordrhein-Westfalen':'DE-NW','Rheinland-Pfalz':'DE-RP','Saarland':'DE-SL','Sachsen':'DE-SN','Sachsen-Anhalt':'DE-ST','Schleswig-Holstein':'DE-SH','Thüringen':'DE-TH'}
             results=[]
-            for row in raw.get('results',[])[:5]:
+            for row in raw.get('results',[])[:20 if postcode else 5]:
+                if postcode and row.get('postcodes') and postcode not in row['postcodes']:continue
                 country=row['country_code'].upper();region=row.get('admin1','')
                 if region_hint and region_hint not in (region+' '+country+' '+row.get('country','')).casefold():continue
-                results.append(DeviceLocation(latitude=row['latitude'],longitude=row['longitude'],country=country,subdivision=german.get(region,'') if country=='DE' else '',label=', '.join(filter(None,[row['name'],region,country]))[:100],timezone=row.get('timezone','Europe/Berlin')).model_dump())
+                results.append(DeviceLocation(latitude=row['latitude'],longitude=row['longitude'],country=country,subdivision=german.get(region,'') if country=='DE' else '',label=', '.join(filter(None,[row['name'],row.get('admin2',''),row.get('admin3',''),region,country]))[:100],timezone=row.get('timezone','Europe/Berlin')).model_dump())
             return {'locations':results}
-        value=await self.cached('geocoding',query.casefold(),30*86400,fetch)
+        value=await self.cached('geocoding','v2:'+query.casefold(),30*86400,fetch)
         return value['locations']
 
     async def weather(self,location,day):
