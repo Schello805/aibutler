@@ -8,7 +8,7 @@ import secrets
 import time
 from typing import Annotated
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -641,6 +641,19 @@ def create_app(settings=None):
         # Provider verification, signature checks, normalization and outbound adapter are extension points.
         raise HTTPException(501,'Messenger-Adapter noch nicht implementiert')
     frontend = Path(__file__).resolve().parent.parent/'frontend'
+    # Freeze the displayed revision and asset URLs to the same running release.
+    import hashlib,re,subprocess
+    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js'))).hexdigest()[:10]
+    root=frontend.parent.resolve()
+    release_match=re.fullmatch(r'\d{8}T\d{6}Z-([a-f0-9]{12})',root.name)
+    revision=release_match.group(1) if release_match else ''
+    if not revision:
+        try:
+            git_revision=subprocess.run(['git','-C',str(root),'rev-parse','--short=12','HEAD'],capture_output=True,text=True,timeout=2,check=True).stdout.strip()
+            if re.fullmatch(r'[a-f0-9]{7,40}',git_revision):revision=git_revision
+        except (OSError,subprocess.SubprocessError):pass
+    revision=revision or 'lokal'
+    index_html=(frontend/'index.html').read_text().replace('__APP_REVISION__',revision).replace('__UI_REVISION__',ui_revision)
     app.mount('/static',StaticFiles(directory=frontend),name='static')
     @app.get('/favicon.ico',include_in_schema=False)
     async def favicon():
@@ -652,7 +665,7 @@ def create_app(settings=None):
 
     @app.get('/')
     async def index():
-        return FileResponse(frontend/'index.html')
+        return HTMLResponse(index_html)
     return app
 
 app = create_app()

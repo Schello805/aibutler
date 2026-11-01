@@ -160,3 +160,18 @@ def test_restore_does_not_resurrect_previously_revoked_sessions(tmp_path,monkeyp
 
 def test_installer_accepts_forced_dependency_refresh():
     assert installer('--refresh-deps').returncode==0
+
+
+def test_visible_revision_matches_versioned_assets(tmp_path):
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,worker_enabled=False,semantic_enabled=False,speech_enabled=False,api_token='test'))
+    with TestClient(app) as client:
+        response=client.get('/')
+        assert response.status_code==200
+        assert '__APP_REVISION__' not in response.text
+        assert '__UI_REVISION__' not in response.text
+        import re
+        ui=re.search(r'UI ([a-f0-9]{10})',response.text).group(1)
+        assert f'/static/app.js?v={ui}' in response.text
+        assert f'/static/style.css?v={ui}' in response.text
+        assert 'Rev. ' in response.text
+        assert response.headers['cache-control']=='no-store'

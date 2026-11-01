@@ -2513,3 +2513,5 @@ body[data-view=chat] .chat-top {height:36px;min-height:36px;}
  body.keyboard-open[data-view=chat] .voice-control {display:none;}
 }
 @media(max-height:600px){body[data-view=chat] .chat-footnote{display:none;}body[data-view=chat] .chat-top{display:none;}body[data-view=chat] #chat-form{padding-top:6px;padding-bottom:8px;}}
+
+.app-revision{display:flex;flex-direction:column;gap:2px;font:10px/1.4 ui-monospace,SFMono-Regular,monospace;color:#788775;white-space:nowrap;user-select:all}.app-revision small{font-size:8px;color:#95a18e}@media(max-width:700px){.app-header .breadcrumb>span:not(.workspace-dot){display:none}.app-header{gap:8px}.header-actions{gap:8px}.app-revision{font-size:9px}.app-revision small{font-size:8px}}
