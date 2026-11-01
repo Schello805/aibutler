@@ -20,7 +20,7 @@ function harness({denied=false,pending=false,proxyFailure=false}={}){
   createMediaStreamSource(){return{connect(){}};}
   createAnalyser(){return{fftSize:4,getFloatTimeDomainData(samples){samples.fill(.1);}};}
  }
- const context=vm.createContext({elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
+ const context=vm.createContext({beginSearchWait:()=>({controller:new AbortController(),finish(){}}),elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
   window:{isSecureContext:true,MediaRecorder:Recorder,AudioContext,speechSynthesis:{cancel(){}}},navigator:{mediaDevices:{getUserMedia(){requests++;return denied?Promise.reject(Object.assign(new Error('denied'),{name:'NotAllowedError'})):media;}}},
   $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{addEventListener(){}},
   fetch:async()=>{uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?'};}};}});

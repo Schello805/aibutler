@@ -18,12 +18,16 @@ from pydantic import BaseModel,Field
 from .public_data import outdoor_question,target_day
 from .retrieval import STOPWORDS
 
+class CalendarSelectionError(ValueError):
+    pass
+
 D='DAV:';C='urn:ietf:params:xml:ns:caldav';A='urn:ietf:params:xml:ns:carddav'
 
 
 def icloud_error(exc,stage):
     # Only fixed messages and numeric status codes; never echo provider bodies/URLs.
     prefix='iCloud · '+stage+': '
+    if isinstance(exc,CalendarSelectionError):return prefix+str(exc)
     if isinstance(exc,httpx.HTTPStatusError):
         code=exc.response.status_code
         message={401:'Apple lehnt die Anmeldung ab. Apple-Account und app-spezifisches Passwort prüfen.',403:'Apple verweigert den Zugriff auf diese Sammlung.',404:'Die angeforderte iCloud-Sammlung wurde nicht gefunden.',400:'Apple hat die DAV-Abfrage abgelehnt.',429:'Zu viele Abrufe. Bitte kurz warten und erneut testen.'}.get(code,'Apple-Dienst derzeit nicht verfügbar.' if code>=500 else 'Apple hat den Abruf abgelehnt.')
@@ -112,14 +116,19 @@ class DAV:
         return result
 
     async def read(self,settings,start=None,end=None,zone='Europe/Berlin'):
-        result=[]
+        result=[];warnings=[]
         async with httpx.AsyncClient(timeout=20,auth=httpx.BasicAuth(self.user,self.password),follow_redirects=False,trust_env=False) as client:
             collections=await self.discover(client)
             selected={name.strip().casefold() for name in re.split(r'[,\n]',settings.icloud_calendar_names) if name.strip()} if self.kind=='calendar' else set()
             if selected:
                 available={collection['name'].strip().casefold() for collection in collections}
-                if selected-available:raise ValueError('Ein ausgewählter Kalender ist nicht verfügbar')
+                missing=selected-available
+                visible=', '.join(collection['name'] for collection in collections)[:800]
                 collections=[collection for collection in collections if collection['name'].strip().casefold() in selected]
+                if missing:
+                    warning='Nicht über iCloud gefunden: '+', '.join(sorted(missing))[:500]+'. Über iCloud lesbar: '+visible+'. Kalenderauswahl prüfen; lokale oder abonnierte Kalender werden nicht automatisch über CalDAV bereitgestellt.'
+                    if not collections:raise CalendarSelectionError(warning)
+                    warnings.append(warning)
             for collection in collections:
                 if self.kind=='calendar':
                     stamp=lambda value:value.astimezone(ZoneInfo('UTC')).strftime('%Y%m%dT%H%M%SZ')
@@ -146,7 +155,7 @@ class DAV:
                         self.stage='Kontaktabruf'
                     if len(result)>5000:raise ValueError('Zu viele iCloud-Einträge im Zeitraum')
         unique={row['id']:row for row in result}
-        return {'records':list(unique.values()),'collections':[row['name'] for row in collections]}
+        return {'records':list(unique.values()),'collections':[row['name'] for row in collections],'partial':bool(warnings),'warnings':warnings}
 
 
 def as_datetime(value,zone):
@@ -220,6 +229,7 @@ def self_profile_question(question):
 
 def wants_calendar(question):
     if self_profile_question(question) and not re.search(r'arbeitszeit|termin|kalender|wann|morgen|heute',question,re.I):return False
+    if re.search(r'was steht.{0,80}(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|woche)',question,re.I):return True
     return outdoor_question(question) or bool(re.search(r'kalender|termin|besprechung|zeit habe|habe ich zeit|frei|verfügbar|verfuegbar|arbeitszeit|wann arbeite|wann muss ich arbeiten|hab(?:e)? ich.{0,30}zeit|muss ich.{0,25}arbeiten|arbeite ich|was steht.{0,20}\ban\b|wie sieht.{0,20}(?:tag|woche|plan)',question,re.I))
 
 
@@ -243,8 +253,8 @@ class PersonalSources:
                 try:current=datetime.fromisoformat(previous['value']['start'])<=start and datetime.fromisoformat(previous['value']['end'])>=end and previous['value'].get('zone')==zone
                 except (KeyError,TypeError,ValueError):current=False
             if current and not force and scope not in self.retry and time.time()-previous['checked']<(60 if kind=='calendar' else 300):
-                self.status[key]={'checked':datetime.fromtimestamp(previous['checked'],ZoneInfo('UTC')).isoformat(),'fetched':len(previous['value']['records']),'cached':True,'running':False}
-                return {**previous['value'],'checked':previous['checked'],'stale':False}
+                self.status[key]={'checked':datetime.fromtimestamp(previous['checked'],ZoneInfo('UTC')).isoformat(),'fetched':len(previous['value']['records']),'cached':True,'running':False,'warning':' · '.join(previous['value'].get('warnings',[]))}
+                return {**previous['value'],'checked':previous['checked'],'stale':bool(previous['value'].get('partial'))}
             key='icloud_'+kind
             if self.retry.get(scope,0)>time.monotonic():
                 self.status[key]={**self.status.get(key,{}),'error':self.status.get(key,{}).get('error','iCloud-Abruf fehlgeschlagen; erneuter Versuch in Kürze.')}
@@ -257,8 +267,8 @@ class PersonalSources:
                 if kind=='calendar':data.update(start=start.isoformat(),end=end.isoformat(),zone=zone)
                 self.store.save_dav_snapshot(scope,data)
                 self.retry.pop(scope,None)
-                self.status[key]={'checked':datetime.now(ZoneInfo('UTC')).isoformat(),'fetched':len(data['records']),'running':False}
-                return {**data,'checked':time.time(),'stale':False}
+                self.status[key]={'checked':datetime.now(ZoneInfo('UTC')).isoformat(),'fetched':len(data['records']),'running':False,'warning':' · '.join(data.get('warnings',[]))}
+                return {**data,'checked':time.time(),'stale':bool(data.get('partial'))}
             except asyncio.CancelledError:
                 self.status[key]={**previous_status,'running':False,'error':'iCloud-Abruf abgebrochen oder Zeitlimit erreicht. Bisherige Daten bleiben erhalten.'}
                 raise
@@ -271,14 +281,21 @@ class PersonalSources:
         now=datetime.now(ZoneInfo('Europe/Berlin'));start=now.replace(hour=0,minute=0,second=0,microsecond=0);end=start+timedelta(days=14)
         await asyncio.gather(self.refresh('calendar',start,end),self.refresh('contacts'))
 
+    async def for_question(self,kind,*args,**kwargs):
+        try:return await asyncio.wait_for(self.refresh(kind,*args,**kwargs),timeout=12)
+        except TimeoutError:
+            previous=await asyncio.to_thread(self.store.dav_snapshot,account_scope(self.settings,kind))
+            return {**previous['value'],'checked':previous['checked'],'stale':True} if previous else None
+
     async def context(self,question,sender='',identity=None,zone='Europe/Berlin',requested=()):
         need_calendar=wants_calendar(question) or 'calendar' in requested;need_contacts=self_profile_question(question) or wants_contacts(question,sender) or 'contacts' in requested or bool(need_calendar and identity)
         result={'sources':[],'diagnostics':[],'calendar':None,'contacts':[],'self_contact':None}
         today=datetime.now(ZoneInfo(zone)).date();day=target_day(question,today)
         start=datetime.combine(day or today,daytime.min,ZoneInfo(zone));end=start+timedelta(days=1 if day else 14)
-        calendar,contacts=await asyncio.gather(self.refresh('calendar',start,end,zone,force=bool(re.search(r'aktuell|jetzt|live|neu laden',question,re.I))) if need_calendar else asyncio.sleep(0),self.refresh('contacts',force=self_profile_question(question) or bool(re.search(r'aktuell|live|neu laden|meine frau|mein mann',question,re.I))) if need_contacts else asyncio.sleep(0))
+        calendar,contacts=await asyncio.gather(self.for_question('calendar',start,end,zone,force=bool(re.search(r'aktuell|jetzt|live|neu laden',question,re.I))) if need_calendar else asyncio.sleep(0),self.for_question('contacts',force=self_profile_question(question) or bool(re.search(r'aktuell|live|neu laden|meine frau|mein mann',question,re.I))) if need_contacts else asyncio.sleep(0))
         for kind,data,needed in [('calendar',calendar,need_calendar),('contacts',contacts,need_contacts)]:
             enabled=getattr(self.settings,'icloud_'+kind+'_enabled')
+            if data and data.get('warnings'):result['diagnostics'].extend(data['warnings'])
             if needed and enabled and (not data or data.get('stale')):result['diagnostics'].append('iCloud '+('Kalender' if kind=='calendar' else 'Kontakte')+': aktueller Abruf nicht vollständig verfügbar. Cache-Daten sind kein Live-Stand.')
         own_card=next((row for row in contacts['records'] if row['id']==identity),None) if contacts and identity else None
         own_emails={address.casefold() for address in own_card['emails']} if own_card and not contacts['stale'] else set()
@@ -286,7 +303,7 @@ class PersonalSources:
             matching=[row for row in calendar['records'] if datetime.fromisoformat(row['start'])<end and (datetime.fromisoformat(row['end'])>start or (row['start']==row['end'] and datetime.fromisoformat(row['start'])>=start))]
             matching=[{**row,'user_participation':[person['status'] for person in row.get('attendees',[]) if person['email'].casefold() in own_emails]} for row in matching]
             matching.sort(key=lambda row:row['start'])
-            result['calendar']={'events':[{**row,'description':row.get('description','')[:500],'attendees':row.get('attendees',[])[:5]} for row in matching[:30]],'truncated':len(matching)>30,'checked':calendar['checked'],'stale':calendar['stale'],'start':start.isoformat(),'end':end.isoformat(),'collections':calendar['collections'],'cached_window':{'start':calendar.get('start'),'end':calendar.get('end')},'note':'Nur ausgewählte/eingebundene Kalender. Keine Einträge bedeuten nicht automatisch Freizeit oder feste Arbeitszeiten. Geteilte Kalender enthalten auch Termine anderer Personen. OPAQUE/busy bedeutet Kalenderbelegung, nicht automatisch persönliche Teilnahme. user_participation gilt nur für Mailadressen der bestätigten eigenen Kontaktkarte; DECLINED ist keine Zusage. Ganztägige Termine beachten; Enddatum exklusiv.'}
+            result['calendar']={'events':[{**row,'description':row.get('description','')[:500],'attendees':row.get('attendees',[])[:5]} for row in matching[:30]],'truncated':len(matching)>30,'checked':calendar['checked'],'stale':calendar['stale'],'incomplete':bool(calendar.get('partial')),'start':start.isoformat(),'end':end.isoformat(),'collections':calendar['collections'],'cached_window':{'start':calendar.get('start'),'end':calendar.get('end')},'note':'Nur ausgewählte/eingebundene Kalender. Keine Einträge bedeuten nicht automatisch Freizeit oder feste Arbeitszeiten. Geteilte Kalender enthalten auch Termine anderer Personen. OPAQUE/busy bedeutet Kalenderbelegung, nicht automatisch persönliche Teilnahme. user_participation gilt nur für Mailadressen der bestätigten eigenen Kontaktkarte; DECLINED ist keine Zusage. Ganztägige Termine beachten; Enddatum exklusiv.'}
             result['sources'].append({'id':'icloud_calendar:window:'+hashlib.sha256((account_scope(self.settings,'calendar')+start.isoformat()).encode()).hexdigest(),'source':'calendar','title':'iCloud-Kalenderabruf','excerpt':json.dumps({k:v for k,v in result['calendar'].items() if k!='events'},ensure_ascii=False),'document_date':start.isoformat(),'url':None})
             for row in matching[:20]:
                 result['sources'].append({'id':row['id'],'source':'calendar','title':row['title'],'excerpt':json.dumps(row,ensure_ascii=False)+('\nVERALTETER CACHE' if calendar['stale'] else ''),'document_date':row['start'],'url':None})

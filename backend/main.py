@@ -56,6 +56,7 @@ def create_app(settings=None):
     async def lifespan(app):
         if not s.api_token:
             raise RuntimeError('Set API_TOKEN in .env before starting')
+        await asyncio.to_thread(store.recover_pending_turns)
         task = asyncio.create_task(worker.run()) if s.worker_enabled else None
         archive_task=asyncio.create_task(worker.archive_loop()) if s.worker_enabled and s.imap_archive_enabled else None
         yield
@@ -325,7 +326,8 @@ def create_app(settings=None):
 
     @app.post('/api/chat',dependencies=[*protected,Depends(chat_capacity)])
     async def chat(value: Chat,request:Request):
-        key=(user_owner(request),value.request_id or secrets.token_hex(16))
+        value=value.model_copy(update={'request_id':value.request_id or secrets.token_hex(16)})
+        key=(user_owner(request),value.request_id)
         if key in active_chats:raise HTTPException(409,'Diese Frage wird bereits bearbeitet.')
         job={'task':asyncio.create_task(answer_chat(value,request)),'cancelled':False};active_chats[key]=job
         async def disconnect():
@@ -336,7 +338,11 @@ def create_app(settings=None):
         monitor=asyncio.create_task(disconnect())
         try:return await job['task']
         except asyncio.CancelledError:
+            await asyncio.to_thread(store.fail_turn,key[0],key[1],True)
             if job['cancelled']:raise HTTPException(499,'Suche abgebrochen.')
+            raise
+        except Exception:
+            await asyncio.to_thread(store.fail_turn,key[0],key[1])
             raise
         finally:
             monitor.cancel();await asyncio.gather(monitor,return_exceptions=True)
@@ -347,6 +353,15 @@ def create_app(settings=None):
         previous=store.conversation(value.conversation_id,owner_id) if value.conversation_id else None
         if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
         input_message=value.message
+        starting=asyncio.create_task(asyncio.to_thread(store.begin_turn,value.conversation_id,value.message,owner_id,value.request_id))
+        try:turn=await asyncio.shield(starting)
+        except asyncio.CancelledError:
+            # A disk thread cannot be cancelled: let admission finish before marking failure.
+            await asyncio.gather(starting,return_exceptions=True)
+            raise
+        except ValueError:raise HTTPException(409,'Diese Anfrage-ID gehört zu einer anderen Frage.')
+        if turn['status']!='pending':return {**turn['result'],'conversation_id':turn['conversation_id']}
+        value=value.model_copy(update={'conversation_id':turn['conversation_id']})
         last=(previous['messages'][-1].get('payload') or {}) if previous and previous['messages'] else {}
         pending=last.get('pending_question') if last.get('clarification')=='location' else None
         if pending and value.device_location is None and len(value.message)<=80 and re.fullmatch(r"[\w\s,().'-]+",value.message) and not re.match(r'^(wer|was|wann|warum|wie|welche|wo|kann|ist|hat|gibt)\b',value.message,re.I):
@@ -358,7 +373,7 @@ def create_app(settings=None):
             else:
                 question='Die Ortssuche ist gerade nicht erreichbar. Möchtest du es später erneut versuchen?' if places is None else 'Welchen Ort meinst du genau? Bitte nenne Ort und Bundesland.'
                 result={'answer':question,'clarification':'location','pending_question':pending,'sources':[],'diagnostics':[],'external_used':False,'answer_mode':'local','ai_issue':None,'query_planned_by_ai':False}
-                result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id)
+                result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
                 return result
         history=[{'role':message['role'],'text':message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
         if is_current_lighting_question(value.message):
@@ -371,7 +386,7 @@ def create_app(settings=None):
             diagnostics.append('Direkte, rein lesende ioBroker-Abfrage. Angezeigt wird der zuletzt vom Gerät gemeldete Zustand; kein KI-Anbieter wurde für diese Frage aufgerufen.')
             if lighting.get('truncated'):diagnostics.append('Die Abfrage wurde auf 300 Licht-Schaltpunkte begrenzt; weitere Lichtpunkte können fehlen.')
             result={'answer':light_answer(value.message,lighting),'sources':sources,'diagnostics':diagnostics,'external_used':False,'answer_mode':'live' if lighting.get('fresh') else 'local','query_kind':'lighting','ai_issue':None,'query_planned_by_ai':False}
-            result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id)
+            result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
             return result
         weather_needed,holidays_needed=needs_public_context(value.message,history)
         location_missing=weather_needed and s.weather_enabled and value.device_location is None
@@ -379,7 +394,7 @@ def create_app(settings=None):
         if location_missing or region_missing:
             question='Für welchen Ort und welches Bundesland soll ich das prüfen?' if region_missing else 'Für welchen Ort soll ich das Wetter prüfen?'
             result={'answer':question,'clarification':'location','pending_question':value.message,'sources':[],'diagnostics':[],'external_used':False,'answer_mode':'local','ai_issue':None,'query_planned_by_ai':False}
-            result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id)
+            result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
             return result
         display_zone=value.device_location.timezone if value.device_location else 'Europe/Berlin'
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
@@ -540,10 +555,13 @@ def create_app(settings=None):
                     contact=contacts[0];values=contact['emails'] if re.search(r'e.?mail',value.message,re.I) else contact['phones'];local=contact['name']+': '+(', '.join(values) if values else 'Dazu ist keine Angabe im Kontakt gespeichert.')
             calendar=personal_context.get('calendar')
             if calendar and not self_profile_question(value.message) and not any(needs_public_context(value.message,history)):
-                if calendar['stale']:local='Dein Kalender ist gerade nicht aktuell abrufbar. Deshalb kann ich deine Verfügbarkeit nicht bestätigen.'
+                if calendar['stale']:
+                    local=('Im unvollständigen oder älteren Kalenderstand steht „'+calendar['events'][0]['title']+'“ am '+calendar['events'][0]['start'][:10]+'. Eine vollständige Terminübersicht oder freie Zeit kann ich daraus nicht bestätigen.') if calendar['events'] else 'Dein Kalender ist gerade nicht vollständig aktuell abrufbar. Deshalb kann ich deine Verfügbarkeit nicht bestätigen.'
                 elif calendar['events']:
                     event=calendar['events'][0];local='Im abgerufenen Zeitraum steht „'+event['title']+'“ am '+event['start'][:10]+(' (ganztägig).' if event['all_day'] else ' um '+event['start'][11:16]+' Uhr.')+(' Außerdem '+str(len(calendar['events'])-1)+' weitere Termine.' if len(calendar['events'])>1 else '')
                 else:local='Im abgerufenen Zeitraum stehen in den eingebundenen Kalendern keine Termine. Ob du tatsächlich frei hast, weiß ich daraus noch nicht.'
+            if not calendar and any('iCloud Kalender' in note for note in personal_context.get('diagnostics',[])):
+                local='Ich kann deinen iCloud-Kalender gerade nicht vollständig abrufen. Bitte prüfe die Kalenderverbindung und die ausgewählten Kalendernamen.'
             if any(needs_public_context(value.message,history)):
                 if public_context.get('date_needed'):local='Welchen Tag meinst du genau? Bitte nenne ein Datum oder einen Wochentag.'
                 elif public_context.get('location_needed'):local='Für welchen Ort möchtest du das wissen? Du kannst den Standort dieses Geräts im Chat freigeben.'
@@ -560,7 +578,7 @@ def create_app(settings=None):
         sources.extend(personal_context.get('sources',[]))
         sources.extend(public_context.get('sources',[]))
         result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai}
-        result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id)
+        result['conversation_id']=store.save_exchange(value.conversation_id,input_message,result,owner_id,request_id=value.request_id)
         return result
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])

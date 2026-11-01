@@ -203,8 +203,8 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                     result=await asyncio.wait_for(operation,timeout=20)
                 except TimeoutError:
                     raise HTTPException(504,'iCloud-Test nach 20 Sekunden beendet. Apple antwortet zu langsam oder ein Abruf läuft noch. Bitte später erneut testen.')
-                if not result or result['stale']:raise HTTPException(502,worker.personal.status.get(service,{}).get('error','iCloud-Abruf fehlgeschlagen; bitte erneut versuchen.'))
-                return {'ok':True,'message':'iCloud lesend verbunden · '+str(len(result['records']))+(' Termine im Testzeitraum' if kind=='calendar' else ' Kontakte')+' · Sammlungen: '+', '.join(result['collections'])}
+                if not result or (result['stale'] and not result.get('partial')):raise HTTPException(502,worker.personal.status.get(service,{}).get('error','iCloud-Abruf fehlgeschlagen; bitte erneut versuchen.'))
+                return {'ok':True,'warning':bool(result.get('partial')),'message':('iCloud teilweise lesbar · ' if result.get('partial') else 'iCloud lesend verbunden · ')+str(len(result['records']))+(' Termine im Testzeitraum' if kind=='calendar' else ' Kontakte')+' · Sammlungen: '+', '.join(result['collections'])+(' · '+' · '.join(result['warnings']) if result.get('warnings') else '')}
             if service=='llm':
                 # Explicit test sends no personal data and does not enable monitoring.
                 test_settings = s.model_copy(update={'allow_external_llm':True,'gemini_paid_confirmed':True})

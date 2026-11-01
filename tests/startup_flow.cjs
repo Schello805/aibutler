@@ -2,7 +2,7 @@ const {test}=require('node:test');const assert=require('node:assert/strict');con
 const app=fs.readFileSync('frontend/app.js','utf8');const source=app.slice(app.indexOf('async function restoreLogin(){'),app.indexOf("$('login-form').onsubmit"));
 test('saved chat opens even when admin settings and import status never finish',async()=>{
  const calls=[];const elements={};const pending=new Promise(()=>{});
- const ctx=vm.createContext({authRevision:0,currentUser:null,manualLocation:null,conversationId:null,connected:false,location:{hash:'#chat'},
+ const ctx=vm.createContext({authRevision:0,conversationRevision:0,currentUser:null,manualLocation:null,conversationId:null,connected:false,location:{hash:'#chat'},
   $:id=>elements[id]??(elements[id]={children:[1]}),document:{body:{dataset:{}}},localStorage:{getItem:key=>key==='conversation'?'last-chat':null},sessionStorage:{getItem:()=>null},
   conversationKey:()=> 'conversation',notice(){},welcome(){},renderContext(){},api:async path=>path==='session'?{user:{id:'u',role:'admin',email:'test@example.invalid'}}:pending,
   openConversation:id=>(calls.push(id),Promise.resolve()),refresh:()=>pending,loadConnections:()=>pending,loadAccounts:()=>pending,loadMyIdentity:()=>pending,loadConversations:()=>pending});

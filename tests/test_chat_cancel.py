@@ -19,6 +19,10 @@ def test_cancellation_is_owner_scoped_and_releases_chat_capacity(tmp_path,monkey
             headers={'cookie':'butler_session=owner-a','origin':'http://127.0.0.1'}
             running=asyncio.create_task(client.post('/api/chat',json=body,headers=headers))
             await asyncio.wait_for(started.wait(),2)
+            saved=(await client.get('/api/conversations',headers=headers)).json()
+            assert len(saved)==1
+            messages=(await client.get('/api/conversations/'+saved[0]['id'],headers=headers)).json()['messages']
+            assert messages[0]['text']==body['message'] and messages[1]['payload']['pending']
             wrong=await client.post('/api/chat/cancel',json={'request_id':request_id},headers={**headers,'cookie':'butler_session=owner-b'})
             assert wrong.json()=={'cancelled':False} and not running.done()
             result=await client.post('/api/chat/cancel',json={'request_id':request_id},headers=headers)

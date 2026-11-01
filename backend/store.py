@@ -21,6 +21,7 @@ class Store:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
             CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,title TEXT,updated TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS chat_turns(owner TEXT,request_id TEXT,conversation_id TEXT,user_message_id INTEGER,assistant_message_id INTEGER,status TEXT,PRIMARY KEY(owner,request_id));
             CREATE TABLE IF NOT EXISTS conversation_messages(id INTEGER PRIMARY KEY,conversation_id TEXT,role TEXT,text TEXT,payload TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS conversation_order ON conversation_messages(conversation_id,id);
             CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
@@ -380,9 +381,49 @@ class Store:
             messages=[{**dict(message),'payload':json.loads(message['payload'])} for message in db.execute('SELECT role,text,payload,created FROM (SELECT * FROM conversation_messages WHERE conversation_id=? ORDER BY id DESC LIMIT 100) ORDER BY id',(conversation_id,))]
             return {**dict(row),'messages':messages}
 
-    def save_exchange(self,conversation_id,question,result,owner_id=None):
+    def begin_turn(self,conversation_id,question,owner_id,request_id):
+        requested_conversation=conversation_id
         conversation_id=conversation_id or uuid.uuid4().hex
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            existing=db.execute('SELECT * FROM chat_turns WHERE owner=? AND request_id=?',(owner_id or '',request_id)).fetchone()
+            if existing:
+                original=db.execute('SELECT text FROM conversation_messages WHERE id=?',(existing['user_message_id'],)).fetchone()
+                if original[0]!=question or (requested_conversation and requested_conversation!=existing['conversation_id']):raise ValueError('Anfrage-ID gehört zu einer anderen Frage')
+                payload=db.execute('SELECT payload FROM conversation_messages WHERE id=?',(existing['assistant_message_id'],)).fetchone()
+                return {**dict(existing),'result':json.loads(payload[0])}
+            db.execute('INSERT OR IGNORE INTO conversations(id,title,owner_id) VALUES(?,?,?)',(conversation_id,question[:80],owner_id))
+            if owner_id and not db.execute('SELECT 1 FROM conversations WHERE id=? AND owner_id=?',(conversation_id,owner_id)).fetchone():raise ValueError('Gespräch nicht zugänglich')
+            user=db.execute('INSERT INTO conversation_messages(conversation_id,role,text,payload) VALUES(?,?,?,?)',(conversation_id,'user',question,json.dumps({'request_id':request_id,'status':'stored'})))
+            pending={'answer':'Deine Frage ist gespeichert. Die Antwort wird noch bearbeitet.','pending':True,'request_id':request_id}
+            assistant=db.execute('INSERT INTO conversation_messages(conversation_id,role,text,payload) VALUES(?,?,?,?)',(conversation_id,'assistant',pending['answer'],json.dumps(pending)))
+            db.execute('INSERT INTO chat_turns VALUES(?,?,?,?,?,?)',(owner_id or '',request_id,conversation_id,user.lastrowid,assistant.lastrowid,'pending'))
+            db.execute('UPDATE conversations SET updated=CURRENT_TIMESTAMP WHERE id=?',(conversation_id,))
+        return {'conversation_id':conversation_id,'status':'pending'}
+
+    def fail_turn(self,owner_id,request_id,cancelled=False):
+        answer='Suche abgebrochen. Deine Frage bleibt gespeichert.' if cancelled else 'Die Antwort konnte nicht abgeschlossen werden. Deine Frage bleibt gespeichert; bitte erneut versuchen.'
+        with self.connect() as db:
+            row=db.execute("SELECT * FROM chat_turns WHERE owner=? AND request_id=? AND status='pending'",(owner_id or '',request_id)).fetchone()
+            if not row:return
+            db.execute('UPDATE conversation_messages SET text=?,payload=? WHERE id=?',(answer,json.dumps({'answer':answer,'pending':False,'interrupted':True}),row['assistant_message_id']))
+            db.execute("UPDATE chat_turns SET status='failed' WHERE owner=? AND request_id=?",(owner_id or '',request_id))
+
+    def recover_pending_turns(self):
+        with self.connect() as db:
+            rows=list(db.execute("SELECT owner,request_id FROM chat_turns WHERE status='pending'"))
+        for row in rows:self.fail_turn(row['owner'],row['request_id'])
+
+    def save_exchange(self,conversation_id,question,result,owner_id=None,request_id=None):
+        conversation_id=conversation_id or uuid.uuid4().hex
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            turn=db.execute('SELECT * FROM chat_turns WHERE owner=? AND request_id=?',(owner_id or '',request_id)).fetchone() if request_id else None
+            if turn:
+                db.execute('UPDATE conversation_messages SET text=?,payload=? WHERE id=?',(result['answer'],json.dumps(result,ensure_ascii=False),turn['assistant_message_id']))
+                db.execute("UPDATE chat_turns SET status='done' WHERE owner=? AND request_id=?",(owner_id or '',request_id))
+                db.execute('UPDATE conversations SET updated=CURRENT_TIMESTAMP WHERE id=?',(turn['conversation_id'],))
+                return turn['conversation_id']
             db.execute('INSERT OR IGNORE INTO conversations(id,title,owner_id) VALUES(?,?,?)',(conversation_id,question[:80],owner_id))
             if owner_id and not db.execute('SELECT 1 FROM conversations WHERE id=? AND owner_id=?',(conversation_id,owner_id)).fetchone():raise ValueError('Gespräch nicht zugänglich')
             db.execute('INSERT INTO conversation_messages(conversation_id,role,text,payload) VALUES(?,?,?,?)',(conversation_id,'user',question,'{}'))

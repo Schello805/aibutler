@@ -319,3 +319,29 @@ def test_contact_filter_preserves_apple_group_labels_and_rejects_truncation():
     assert 'Spouse' in card['related'][0]['type']
     with pytest.raises(ValueError):parse_contact(raw.replace('END:VCARD',''),'scope')
     with pytest.raises(ValueError):parse_contact(raw+raw,'scope')
+
+
+def test_missing_selected_calendar_keeps_readable_events_but_marks_incomplete(tmp_path,monkeypatch):
+    from defusedxml import ElementTree
+    s=settings(tmp_path,icloud_calendar_names='Familie, Abfuhrplan')
+    async def discover(self,client):return [{'name':'Familie','url':'https://caldav.icloud.com/calendars/family/'}]
+    async def request(self,client,method,url,body,depth='0'):
+        return ElementTree.fromstring(multistatus('<c:calendar-data>'+escape(ICS)+'</c:calendar-data>')),url
+    monkeypatch.setattr(DAV,'discover',discover);monkeypatch.setattr(DAV,'request',request)
+    personal=PersonalSources(s,Store(tmp_path))
+    result=asyncio.run(personal.refresh('calendar',START,END))
+    assert result['records'] and result['partial'] and result['stale']
+    assert 'abfuhrplan' in result['warnings'][0] and 'Familie' in result['warnings'][0]
+    context=asyncio.run(personal.context('Was steht am Montag an?'))
+    assert context['calendar']['incomplete'] and context['calendar']['stale']
+    assert context['calendar']['events']
+
+
+def test_no_selected_calendar_found_reports_names_safely(tmp_path,monkeypatch):
+    from backend.icloud import icloud_error,CalendarSelectionError
+    s=settings(tmp_path,icloud_calendar_names='Missing')
+    async def discover(self,client):return [{'name':'Familie','url':'https://caldav.icloud.com/private/path/'}]
+    monkeypatch.setattr(DAV,'discover',discover)
+    with pytest.raises(CalendarSelectionError) as failure:asyncio.run(DAV(s,'calendar').read(s,START,END))
+    message=icloud_error(failure.value,'Sammlungssuche')
+    assert 'missing' in message and 'Familie' in message and 'private/path' not in message
