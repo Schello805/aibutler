@@ -227,7 +227,7 @@ def create_app(settings=None):
     app.include_router(memory_router(memories,auth))
     from .benchmark import benchmark_router
     app.include_router(benchmark_router(s,worker,admin_auth))
-    from .controls import ControlService,control_router
+    from .controls import ControlService,control_router,is_control_request
     controls=ControlService(s,store)
     app.state.controls=controls
     app.include_router(control_router(controls,auth))
@@ -372,7 +372,7 @@ def create_app(settings=None):
         key=(user_owner(request),value.request_id)
         if key in active_chats:raise HTTPException(409,'Diese Frage wird bereits bearbeitet.')
         initial_route=route_question(value.message)
-        uses_slot=not (initial_route and initial_route['kind'] in ('reply','clarify'))
+        uses_slot=not ((initial_route and initial_route['kind'] in ('reply','clarify')) or is_control_request(value.message))
         if uses_slot:
             if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
             await chat_slots.acquire()
@@ -471,7 +471,7 @@ def create_app(settings=None):
                 result={'answer':str(exc),'sources':[],'diagnostics':[],'external_used':False}
             result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
             return result
-        control_reply=controls.plan(input_message,owner_id)
+        control_reply=controls.plan(input_message,owner_id,last)
         if control_reply:
             control_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(control_reply),owner_id,request_id=value.request_id)
             return control_reply

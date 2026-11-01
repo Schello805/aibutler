@@ -39,36 +39,80 @@ def devices(raw):
     if len({d.name.strip().casefold() for d in result})!=len(result):raise ValueError('Gerätenamen müssen eindeutig sein')
     return result
 
+def request_text(text):
+    text=re.sub(r'^bitte\s+','',text.strip().casefold()).rstrip('.!?').strip()
+    polite=re.match(r'^(?:kannst|könntest|koenntest|würdest|wuerdest|magst)\s+du\s+(?:bitte\s+)?',text)
+    return (text[polite.end():] if polite else text),bool(polite)
+
+def is_control_request(text):
+    text,polite=request_text(text)
+    direct=bool(re.match(r'^(?:fahr(?:e)?|schalte|schalt|öffne|oeffne|schließe|schliesse|stoppe|stopp)\b',text))
+    verb=bool(re.search(r'\b(?:runterfahren|herunterfahren|hochfahren|rauffahren|fahren|öffnen|oeffnen|schließen|schliessen|stoppen|anhalten|einschalten|ausschalten)\b',text))
+    factual=bool(re.search(r'\b(?:wann|warum|wieso|ob|wie|sagen|erklären|erklaeren|prüfen|pruefen|gestern)\b',text))
+    return direct or (polite and verb and not factual)
+
 def control_intent(text):
-    """Only direct imperative user messages; questions and negation never actuate."""
-    text=text.strip().casefold().rstrip('.!')
-    text=re.sub(r'^bitte\s+','',text)
-    if re.search(r'\b(nicht|kein\w*|und|oder|vielleicht|falls|wenn|alle)\b|[?;\n]',text):return None
-    if not re.match(r'^(?:fahr(?:e)?|schalte|schalt|öffne|oeffne|schließe|schliesse|stoppe|stopp)\b',text):return None
-    if re.search(r'\bstopp(?:e)?\b|\banhalten\b',text):return {'action':'stop'}
-    percent=re.search(r'\b(?:auf)\s+(\d{1,3})\s*(?:%|prozent)\s*$',text)
+    """Imperative or polite requests only. Still just a proposal, never a write."""
+    if not is_control_request(text):return None
+    text,_=request_text(text)
+    if re.search(r'\b(nicht|kein\w*|und|oder|vielleicht|falls|wenn|alle|morgen|später|spaeter|nachher|um|sobald)\b|[?;\n]',text):return None
+    if re.search(r'\bstopp(?:e|en)?\b|\banhalten\b',text):return {'action':'stop'}
+    number_words={'null':'0','hundert':'100','fünfzig':'50','fuenfzig':'50','fünfundzwanzig':'25','fuenfundzwanzig':'25','fünfundsiebzig':'75','fuenfundsiebzig':'75'}
+    text=re.sub(r'\bauf\s+('+ '|'.join(number_words)+r')\s+(prozent)\b',lambda match:'auf '+number_words[match[1]]+' '+match[2],text)
+    percent=re.search(r'\bauf\s+(\d{1,3})\s*(?:%|prozent)(?:\s+(?:fahren|stellen))?(?:\s+bitte)?\s*$',text)
     if percent:return {'action':'position','percent':int(percent[1])}
-    if re.search(r'\b(?:hoch|rauf|öffne|oeffne|auf)\b',text):return {'action':'position','percent':100}
-    if re.search(r'\b(?:runter|herunter|zu|schließe|schliesse)\b',text):return {'action':'position','percent':0}
-    if re.search(r'\b(?:ein|an)\s*$',text):return {'action':'switch','value':True}
-    if re.search(r'\baus\s*$',text):return {'action':'switch','value':False}
+    if '%' in text or 'prozent' in text:return None
+    if re.search(r'\b(?:halb|teilweise|bisschen|etwas|wenig)\b',text):return None
+    if re.search(r'\b(?:einschalten|ein|an)(?:\s+bitte)?\s*$',text):return {'action':'switch','value':True}
+    if re.search(r'\b(?:ausschalten|aus)(?:\s+bitte)?\s*$',text):return {'action':'switch','value':False}
+    if re.search(r'\b(?:hoch(?:fahren)?|rauf(?:fahren)?|öffne|oeffne|öffnen|oeffnen)\b|\bauf(?:\s+bitte)?$',text):return {'action':'position','percent':100}
+    if re.search(r'\b(?:runter(?:fahren)?|herunter(?:fahren)?|zu|schließe|schliesse|schließen|schliessen)\b',text):return {'action':'position','percent':0}
     return None
+
+def normalized(value):
+    value=value.casefold().translate(str.maketrans({'ä':'ae','ö':'oe','ü':'ue','ß':'ss'}))
+    return ' '.join(word for word in re.findall(r'\w+',value) if word not in {'das','die','der','den','dem','im','in','am','bitte'})
+
+def canonical_command(device,intent):
+    if intent['action']=='switch':return 'Schalte '+device.name+(' ein' if intent['value'] else ' aus')
+    if intent['action']=='stop':return 'Stoppe '+device.name
+    return 'Fahre '+device.name+' auf '+str(intent['percent'])+' Prozent'
 
 def config_identity(settings):
     return hashlib.sha256(json.dumps([settings.iobroker_url,settings.iobroker_api,settings.iobroker_user,settings.iobroker_password,settings.iobroker_token,settings.iobroker_controls,settings.iobroker_control_enabled]).encode()).hexdigest()
 
 class ControlService:
     def __init__(self,settings,store):self.settings=settings;self.store=store;self.pending={};self.lock=asyncio.Lock()
-    def plan(self,text,owner):
-        intent=control_intent(text)
-        if not intent:return None
+    def plan(self,text,owner,last=None):
+        last=last or {};intent=control_intent(text)
         base={'sources':[],'diagnostics':[],'external_used':False,'answer_mode':'local','query_kind':'device_control'}
-        if not self.settings.iobroker_control_enabled:return {**base,'answer':'Die Gerätesteuerung ist noch nicht freigegeben. Unter Einstellungen → ioBroker kannst du Lampen, Steckdosen und Rollos gezielt freigeben.'}
         names=devices(self.settings.iobroker_controls)
+        choices=last.get('control_choices',[])
+        # A short answer may resolve the immediately preceding device question.
+        if not intent and choices and re.fullmatch(r'(?:nein|nein danke|abbrechen)[.!]?',text.strip(),re.I):return {**base,'answer':'Okay, ich habe nichts geschaltet.'}
+        if not intent and choices and len(text.split())<=12:
+            chosen=[d for d in names if any(d.name==choice['name'] for choice in choices) and (normalized(text).strip()==normalized(d.name) or normalized(d.name).endswith(' '+normalized(text)))]
+            if re.fullmatch(r'(?:ja|ja bitte|genau|genau das|das meine ich)[.!]?',text.strip(),re.I):
+                if len(choices)!=1:return {**base,'answer':'Welches der vorgeschlagenen Geräte meinst du? Ich habe noch nichts geschaltet.','control_choices':choices,'control_intent':last.get('control_intent')}
+                chosen=[d for d in names if d.name==choices[0]['name']]
+                if not chosen:return {**base,'answer':'Die Gerätefreigabe hat sich geändert. Bitte nenne ein aktuell freigegebenes Gerät.'}
+            if len(chosen)==1:intent=last.get('control_intent');text=canonical_command(chosen[0],intent)
+        if not intent and not is_control_request(text):return None
+        if not intent:return {**base,'answer':'Ich habe nichts geschaltet. Bitte nenne ein einzelnes Gerät und die gewünschte Aktion, zum Beispiel: „Fahre Rollo Wohnzimmer auf 0 Prozent.“'}
+        if not self.settings.iobroker_control_enabled:return {**base,'answer':'Die Gerätesteuerung ist noch nicht freigegeben. Unter Einstellungen → ioBroker kannst du Lampen, Steckdosen und Rollos gezielt freigeben.'}
         compatible=[d for d in names if (d.kind=='switch')==(intent['action']=='switch')]
-        def normalized(value):return ' '.join(word for word in re.findall(r'\w+',value.casefold()) if word not in {'das','die','der','den','dem','im','in','am','bitte'})
         matches=[d for d in compatible if re.search(r'(?<!\w)'+re.escape(normalized(d.name))+r'(?!\w)',normalized(text))]
-        if len(matches)!=1:return {**base,'answer':'Welches freigegebene Gerät meinst du genau? Bitte verwende den vollständigen Namen aus den ioBroker-Einstellungen.'}
+        if len(matches)!=1:
+            import difflib
+            words=normalized(text).split()
+            def similarity(device):
+                target=normalized(device.name);size=len(target.split())
+                return max((difflib.SequenceMatcher(None,target,' '.join(words[index:index+size])).ratio() for index in range(len(words))),default=0)
+            suggested=matches if matches else sorted((d for d in compatible if similarity(d)>=.65),key=similarity,reverse=True)[:3]
+            options=[{'name':d.name,'command':canonical_command(d,intent)} for d in suggested]
+            question='Meinst du „'+suggested[0].name+'“?' if len(suggested)==1 else 'Welches Rollo beziehungsweise Gerät meinst du genau?'
+            if not suggested:question+=' Bitte nenne einen Namen aus den freigegebenen Geräten in den ioBroker-Einstellungen.'
+            return {**base,'answer':question+' Ich habe noch nichts geschaltet.','control_choices':options,'control_intent':intent}
         device=matches[0]
         if intent.get('percent',0)>100:return {**base,'answer':'Die Rollo-Position muss zwischen 0 und 100 Prozent liegen. 100 Prozent bedeutet vollständig offen.'}
         if intent['action']=='stop' and not device.stop_id:return {**base,'answer':'Für dieses Rollo ist noch kein Stopp-Datenpunkt freigegeben.'}

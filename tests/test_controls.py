@@ -117,3 +117,73 @@ def test_chat_command_and_confirm_endpoint_authentication(tmp_path,monkeypatch):
         assert client.post('/api/controls/execute',json={'token':token}).status_code==401
         assert client.post('/api/controls/cancel',headers=headers,json={'token':token}).status_code==200
         assert client.post('/api/controls/execute',headers=headers,json={'token':token}).status_code==404
+
+@pytest.mark.parametrize('question,intent',[
+ ('Kannst du bitte den Rollo Wohnzumertüre runterfahren, also auf 0%',{'action':'position','percent':0}),
+ ('Kannst du bitte das Rollo Wohnzimmer runterfahren?',{'action':'position','percent':0}),
+ ('Könntest du das Rollo Wohnzimmer hochfahren?',{'action':'position','percent':100}),
+ ('Bitte fahre Rollo Wohnzimmer auf 50 Prozent bitte.',{'action':'position','percent':50}),
+ ('Kannst du die Lampe auf dem Flur einschalten?',{'action':'switch','value':True}),
+ ('Würdest du bitte die Lampe Büro ausschalten?',{'action':'switch','value':False}),
+ ('Kannst du Rollo Wohnzimmer stoppen?',{'action':'stop'}),
+ ('Kannst du mir sagen, wann Rollo Wohnzimmer herunterfahren soll?',None),
+ ('Kannst du bitte prüfen, ob Rollo Wohnzimmer herunterfahren kann?',None),
+ ('Kannst du Rollo Wohnzimmer auf -5% fahren?',None),
+ ('Fahre Rollo Wohnzimmer morgen runter',None),
+ ('Fahre Rollo Wohnzimmer auf 50,5%',None),
+])
+def test_natural_requests_and_invalid_requests(question,intent):assert control_intent(question)==intent
+
+def test_typo_requires_device_clarification_before_action(tmp_path):
+    control=service(tmp_path)
+    control.settings.iobroker_controls=json.dumps([{**BLIND,'name':'Rollo Wohnzimmertüre'}])
+    result=control.plan('Kannst du bitte den Rollo Wohnzumertüre runterfahren, also auf 0%','alice')
+    assert result['sources']==[] and 'control_action' not in result
+    assert 'Rollo Wohnzimmertüre' in result['answer']
+    assert result['control_choices'][0]['command']=='Fahre Rollo Wohnzimmertüre auf 0 Prozent'
+    assert not control.pending
+    confirmed_device=control.plan('Ja bitte','alice',result)
+    token=confirmed_device['control_action']['token']
+    assert control.pending[token]['device'].name=='Rollo Wohnzimmertüre'
+    assert control.pending[token]['intent']['percent']==0
+
+def test_natural_request_never_runs_document_search_or_llm(tmp_path,monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.main import create_app
+    from backend import main as module
+    settings=Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,iobroker_url='http://home:8087',iobroker_control_enabled=True,iobroker_controls=json.dumps([{**BLIND,'name':'Rollo Wohnzimmertüre'}]))
+    app=create_app(settings)
+    async def forbidden(*args,**kwargs):raise AssertionError('No retrieval or LLM for device commands')
+    monkeypatch.setattr(module,'generate',forbidden)
+    monkeypatch.setattr(app.state.worker,'targeted_paperless',forbidden,raising=False)
+    with TestClient(app) as client:
+        headers={'Authorization':'Bearer test'}
+        result=client.post('/api/chat',headers=headers,json={'message':'Kannst du bitte den Rollo Wohnzumertüre runterfahren, also auf 0%'}).json()
+        assert result['query_kind']=='device_control' and result['sources']==[]
+        assert not result['external_used'] and result['control_choices']
+        followup=client.post('/api/chat',headers=headers,json={'message':'Ja bitte','conversation_id':result['conversation_id']}).json()
+        assert followup['control_action'] and '0 %' in followup['answer']
+
+@pytest.mark.parametrize('question,expected',[
+ ('Kannst du das Rollo Wohnzimmer auf null Prozent fahren?',{'action':'position','percent':0}),
+ ('Fahre Rollo Wohnzimmer auf fünfzig Prozent',{'action':'position','percent':50}),
+ ('Kannst du das Rollo Wohnzimmer halb öffnen?',None),
+ ('Öffne Rollo Wohnzimmer ein bisschen',None)])
+def test_spoken_percentages_and_partial_opening_are_not_full_open(question,expected):assert control_intent(question)==expected
+
+def test_ambiguous_affirmation_and_decline_do_not_fall_back_to_search(tmp_path):
+    control=service(tmp_path)
+    last={'control_choices':[{'name':'Rollo A','command':'Fahre Rollo A auf 0 Prozent'},{'name':'Rollo B','command':'Fahre Rollo B auf 0 Prozent'}],'control_intent':{'action':'position','percent':0}}
+    ambiguous=control.plan('Ja bitte','alice',last)
+    assert ambiguous['query_kind']=='device_control' and not ambiguous.get('control_action')
+    assert ambiguous['control_choices']==last['control_choices']
+    declined=control.plan('Nein danke','alice',last)
+    assert declined['sources']==[] and not declined.get('control_action')
+    assert not control.pending
+
+def test_removed_suggested_device_is_not_a_document_question(tmp_path):
+    control=service(tmp_path)
+    last={'control_choices':[{'name':'Nicht mehr freigegeben','command':'Fahre Nicht mehr freigegeben auf 0 Prozent'}],'control_intent':{'action':'position','percent':0}}
+    result=control.plan('Ja','alice',last)
+    assert result['query_kind']=='device_control' and 'geändert' in result['answer']
+    assert not control.pending

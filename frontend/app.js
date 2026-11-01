@@ -37,6 +37,7 @@ function answerBubble(result){
   }
   if(!result.pending&&!result.interrupted){const listen=node('button','evidence-link','Anhören');listen.type='button';listen.onclick=async()=>{const actor=currentUser?.id;stopVoice(false);try{await window.ButlerSpeech.prime();listen.disabled=true;await window.ButlerSpeech.speak(result.answer);}catch(error){if(currentUser?.id===actor)notice(error.message);}finally{listen.disabled=false;}};answer.append(listen);}
   if(result.retrieval_mode==='indexed'&&result.question){const deeper=node('button','evidence-link','Gründlicher recherchieren');deeper.type='button';deeper.onclick=()=>{if(chatBusy)return;researchRequested=true;$('question').value=result.question;$('chat-form').requestSubmit();};answer.append(deeper);}
+  if(result.control_choices?.length){const choiceActor=currentUser?.id;const choices=node('div','control-choices');for(const choice of result.control_choices){const choose=node('button','evidence-link',choice.name);choose.type='button';choose.onclick=()=>{if(chatBusy||currentUser?.id!==choiceActor)return;$('question').value=choice.command;$('chat-form').requestSubmit();};choices.append(choose);}answer.append(choices);}
   if(result.control_action)window.ButlerControls?.confirmation(answer,result.control_action);
   if(result.memory_proposal)window.ButlerMemory?.proposal(answer,result.memory_proposal);
   return answer;
