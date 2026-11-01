@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from .intelligence import generate
 from .icloud import ICloudConfig
 from .public_data import PublicConfig,PublicData,DeviceLocation
-from .smarthome import iobroker_error, IoBrokerConfig, read_iobroker, scope
+from .smarthome import iobroker_error, IoBrokerConfig, scope
 
 SERVICE_FIELDS = {
     'icloud_calendar':{'icloud_calendar_enabled','icloud_calendar_user','icloud_calendar_password','icloud_calendar_names'},
@@ -215,8 +215,9 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                 test_settings = s.model_copy(update={'allow_external_llm':True,'gemini_paid_confirmed':True})
                 await generate(test_settings,'Antworte nur mit OK.',{'test':'Verbindungstest ohne persönliche Daten'})
             elif service=='iobroker':
-                states=await read_iobroker(s)
-                return {'ok':True,'message':f'ioBroker erreichbar · {len(states)} Datenpunkte passen zu deinen Mustern.'}
+                result=await worker.poll_iobroker(force=True)
+                if result.get('error'):raise HTTPException(502,result['error'])
+                return {'ok':True,'warning':bool(result.get('warning')),'message':result.get('warning') or f"ioBroker erreichbar · {result['fetched']} Datenpunkte passen zu deinen Mustern."}
             elif service=='imap':
                 if not s.imap_host:
                     raise ValueError('Missing host')

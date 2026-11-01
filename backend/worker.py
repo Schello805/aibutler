@@ -37,6 +37,7 @@ class Worker:
         self.active_jobs=set()
         self.lock = asyncio.Lock()
         self.settings_lock = asyncio.Lock()
+        self.iobroker_lock=asyncio.Lock()
         self.index_lock=asyncio.Lock()
         self.status = {'running':False, 'sources':{}}
         self.mail_search_lock=asyncio.Lock()
@@ -234,18 +235,29 @@ class Worker:
         return result
 
     async def poll_iobroker(self, force=False):
-        if not self.s.iobroker_enabled and not force:
-            self.status['sources']['iobroker']={'disabled':True}
-            return
-        settings=self.s.model_copy()
-        try:
-            states=await read_iobroker(settings)
+        # Connection tests and scheduled reads share one serialized health result.
+        async with self.iobroker_lock:
+            if not self.s.iobroker_enabled and not force:
+                self.status['sources']['iobroker']={'disabled':True}
+                return self.status['sources']['iobroker']
+            settings=self.s.model_copy()
+            try:
+                states=await read_iobroker(settings)
+            except Exception as exc:
+                result={'error':iobroker_error(exc,settings)+' Letzter erfolgreicher Stand bleibt erhalten.'}
+                self.status['sources']['iobroker']=result
+                log.warning('ioBroker fetch failed; preserving last snapshot')
+                return result
             checked=utc_now()
-            self.store.save_smart_snapshot(scope(settings),states,checked)
-            self.status['sources']['iobroker']={'fetched':len(states),'errors':0,'checked':checked}
-        except Exception as exc:
-            self.status['sources']['iobroker']={'error':iobroker_error(exc,settings)+' Letzter erfolgreicher Stand bleibt erhalten.'}
-            log.warning('ioBroker fetch failed; preserving last snapshot')
+            result={'fetched':len(states),'errors':0,'checked':checked,'connected':True}
+            try:
+                await asyncio.to_thread(self.store.save_smart_snapshot,scope(settings),states,checked)
+            except Exception as exc:
+                result['warning']='ioBroker ist erreichbar. Die aktuellen Zustände konnten lokal nicht gespeichert werden; der gespeicherte Stand kann älter sein.'
+                result['storage_error']=True
+                log.warning('ioBroker local snapshot save failed (%s)',failure_code(exc))
+            self.status['sources']['iobroker']=result
+            return result
 
     async def flush_notifications(self):
         pending=self.store.pending_notifications()

@@ -654,7 +654,7 @@ async function testService(id,button) {
   if(savingServices.has(id)) return setServiceStatus(id,'Speichern läuft noch …');
   if(dirtyServices.has(id)) return setServiceStatus(id,'Bitte diese Verbindung zuerst speichern, dann testen.','error');
   button.disabled=true;setServiceStatus(id,'Verbindung wird geprüft …');
-  try {let location=null;if(['weather','holidays'].includes(id)){location=await getDeviceLocation();if(!location)throw new Error('Bitte im Chat einen Ort wählen oder den Gerätestandort freigeben.');} const result=await api('connections/'+id+(location?'/preview':'/test'),{method:'POST',signal:AbortSignal.timeout(25000),...(location?{body:JSON.stringify(location)}:{})});setServiceStatus(id,result.message,result.warning?'warning':'success'); }
+  try {let location=null;if(['weather','holidays'].includes(id)){location=await getDeviceLocation();if(!location)throw new Error('Bitte im Chat einen Ort wählen oder den Gerätestandort freigeben.');} const result=await api('connections/'+id+(location?'/preview':'/test'),{method:'POST',signal:AbortSignal.timeout(25000),...(location?{body:JSON.stringify(location)}:{})});setServiceStatus(id,result.message,result.warning?'warning':'success');if(id==='iobroker')await refresh(); }
   catch(e) { setServiceStatus(id,e.name==='TimeoutError'?'Verbindungstest nach 25 Sekunden beendet. Bitte Dienst oder Proxy prüfen.':e.message,'error'); }
   finally { button.disabled=false; }
 }
