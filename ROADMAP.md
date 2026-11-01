@@ -34,3 +34,7 @@ Wetter und Feiertage sind jetzt implementiert und jeweils in den Einstellungen a
 Umgesetzt: unabhängige Quellenaufträge mit konfigurierbaren Intervallen, sofortige Volltextindexierung, dauerhafte optionale KI-Analysewarteschlange sowie lokale mehrsprachige FastEmbed-/Qdrant-Suche mit fortsetzbarem Aufbau.
 
 Nächster separater Schritt: zeitabhängiges Gedächtnis (Graphiti prüfen), das Aussagen mit Quelle, Gültigkeitszeitraum und Widersprüchen verwaltet. Vor der Integration sind zusätzliche Datenbank-/Modellanforderungen, Löschbarkeit und Kosten zu bewerten. Die aktuelle Bedeutungssuche ersetzt dieses Gedächtnis nicht.
+
+## Bestätigtes Langzeitgedächtnis
+
+Umgesetzt: kontogebundene SQLite-Erinnerungen mit manueller Speicherung, konservativen lokalen Chatvorschlägen, Bestätigung, Konfliktbehandlung für erkannte Themen, Gültigkeitsdaten, Quellenbezug, Bearbeitung und Löschung. Historische Chatprüfung erstellt ausschließlich Vorschläge. Pro Anfrage werden passende bestätigte Einträge als zusätzlicher Kontext ausgewählt. Ein allgemeiner Wissensgraph mit freier Entitäten-/Beziehungsauflösung (z. B. Graphiti) bleibt optional; er ist keine Voraussetzung für diese Erinnerungen.

@@ -31,6 +31,7 @@ function answerBubble(result){
   if(result.clarification==='location'){
     const choose=node('button','evidence-link','Ort angeben');choose.type='button';choose.onclick=()=>{$('location-dialog').showModal();};answer.append(choose);
   }
+  if(result.memory_proposal)window.ButlerMemory?.proposal(answer,result.memory_proposal);
   return answer;
 }
 async function loadConversations(){
@@ -183,10 +184,10 @@ function showEvidence(sources,diagnostics=[]) {
   const content=$('evidence-content');content.replaceChildren();
   for(const source of sources) {
     const card=document.createElement('article');card.className='evidence-card';
-    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS',weather:'WETTER · OPEN-METEO',holidays:'FEIERTAGE · NAGER.DATE',calendar:'ICLOUD · KALENDER',contacts:'ICLOUD · KONTAKTE'}[source.source]||'KONTEXT';
+    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS',weather:'WETTER · OPEN-METEO',holidays:'FEIERTAGE · NAGER.DATE',calendar:'ICLOUD · KALENDER',contacts:'ICLOUD · KONTAKTE',memory:'MEIN WISSEN'}[source.source]||'KONTEXT';
     const title=document.createElement('h3');title.textContent=source.title;
     const excerpt=document.createElement('div');excerpt.className='evidence-excerpt';excerpt.textContent=source.excerpt||'Kein Textauszug verfügbar.';card.append(type,title);
-    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):(source.source==='weather'?'Prognosetag: ':source.source==='holidays'?'Datum: ':'Dokumentdatum: ')+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
+    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):(source.source==='memory'?'Bestätigt/geändert: ':source.source==='weather'?'Prognosetag: ':source.source==='holidays'?'Datum: ':'Dokumentdatum: ')+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
     card.append(excerpt);
     if(source.url && /^https?:\/\//i.test(source.url)) {
       const link=document.createElement('a');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent=source.source==='paperless'?'Original in Paperless öffnen ↗':'Datenquelle öffnen ↗';card.append(link);
@@ -252,7 +253,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
-  pendingSearch?.cancel();locationQuestion=null;
+  pendingSearch?.cancel();window.ButlerMemory?.clear();locationQuestion=null;
   const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   stopVoice();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
@@ -275,7 +276,7 @@ async function restoreLogin(){
   if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
   document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
-  connected=true;if(!$('messages').children.length)welcome();
+  connected=true;if(!$('messages').children.length)welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
   // Resume the chat without waiting for settings, counters or account administration.
   const remembered=localStorage.getItem(conversationKey());
   if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))openConversation(remembered).catch(()=>{});
@@ -652,13 +653,14 @@ $('cfg-llm_provider').addEventListener('change',()=>{
 const viewLabels={
   chat:['Gespräch','Deine Fragen. Dein Wissen.','Dein persönlicher Wissensraum.'],
   sources:['Wissensquellen','Dein Wissen. Verbunden.','Die Grundlage für Antworten, die zu dir passen.'],
+  knowledge:['Mein Wissen','Was dein Butler sich merkt.','Deine bestätigten Angaben, Vorlieben und Vorhaben.'],
   findings:['Fundstücke','Für dich gefunden.','Relevante Hinweise aus deinen E-Mails und Dokumenten.'],
   settings:['Einstellungen','Dein Butler. Deine Verbindungen.','Verwalte deine Dienste und erzähle deinem Butler, was dir wichtig ist.']
 };
 function showView() {
   const hash=window.location.hash.slice(1);
   if(hash==='new-chat'){newConversation();return;}
-  const view=hash==='sources'?'sources':hash==='findings'?'findings':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
+  const view=hash==='knowledge'?'knowledge':hash==='sources'?'sources':hash==='findings'?'findings':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
   for(const element of document.querySelectorAll('.page-view')) element.hidden=element.dataset.view!==view;
   for(const link of document.querySelectorAll('[data-nav]')) {
     if(link.dataset.nav===view) link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
@@ -667,7 +669,8 @@ function showView() {
   const context=hash==='context';$('setup').hidden=context;$('context').hidden=!context;
   for(const tab of document.querySelectorAll('[data-settings-tab]')) tab.setAttribute('aria-selected',String(tab.dataset.settingsTab===(context?'context':'connections')));
   const [label,title,subtitle]=viewLabels[view];$('page-label').textContent=label;$('page-title').textContent=title;$('page-subtitle').textContent=subtitle;
-  document.title='Butler · '+{chat:'Gespräch',sources:'Wissensquellen',findings:'Fundstücke',settings:'Einstellungen'}[view];
+  if(view==='knowledge')window.ButlerMemory?.load();
+  document.title='Butler · '+{knowledge:'Mein Wissen',chat:'Gespräch',sources:'Wissensquellen',findings:'Fundstücke',settings:'Einstellungen'}[view];
   window.scrollTo({top:0,behavior:'instant'});
   if(hash.startsWith('service-'))requestAnimationFrame(()=>$(hash)?.scrollIntoView({block:'start',behavior:'auto'}));
 }
@@ -694,4 +697,4 @@ welcome();showView();
 
 restoreLogin().catch(()=>showLogin());
 
-window.addEventListener('beforeunload',event=>{ if(dirtyServices.size||contextDirty){event.preventDefault();event.returnValue='';} });
+window.addEventListener('beforeunload',event=>{ if(dirtyServices.size||contextDirty||window.ButlerMemory?.dirty()){event.preventDefault();event.returnValue='';} });
