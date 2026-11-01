@@ -113,12 +113,14 @@ class PublicData:
                 raise
 
     async def locations(self,query):
+        city,separator,region_hint=query.partition(',');city=city.strip();region_hint=region_hint.strip().casefold()
         async def fetch():
-            raw=await self.get_json('https://geocoding-api.open-meteo.com/v1/search',{'name':query,'count':5,'language':'de','format':'json'})
+            raw=await self.get_json('https://geocoding-api.open-meteo.com/v1/search',{'name':city,'count':5,'language':'de','format':'json'})
             german={'Freistaat Bayern':'DE-BY','Bayern':'DE-BY','Bavaria':'DE-BY','Baden-Württemberg':'DE-BW','Berlin':'DE-BE','Brandenburg':'DE-BB','Bremen':'DE-HB','Hamburg':'DE-HH','Hessen':'DE-HE','Hesse':'DE-HE','Mecklenburg-Vorpommern':'DE-MV','Niedersachsen':'DE-NI','Lower Saxony':'DE-NI','Nordrhein-Westfalen':'DE-NW','Rheinland-Pfalz':'DE-RP','Saarland':'DE-SL','Sachsen':'DE-SN','Sachsen-Anhalt':'DE-ST','Schleswig-Holstein':'DE-SH','Thüringen':'DE-TH'}
             results=[]
             for row in raw.get('results',[])[:5]:
                 country=row['country_code'].upper();region=row.get('admin1','')
+                if region_hint and region_hint not in (region+' '+country+' '+row.get('country','')).casefold():continue
                 results.append(DeviceLocation(latitude=row['latitude'],longitude=row['longitude'],country=country,subdivision=german.get(region,'') if country=='DE' else '',label=', '.join(filter(None,[row['name'],region,country]))[:100],timezone=row.get('timezone','Europe/Berlin')).model_dump())
             return {'locations':results}
         value=await self.cached('geocoding',query.casefold(),30*86400,fetch)

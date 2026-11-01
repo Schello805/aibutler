@@ -198,7 +198,11 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                 kind=service.removeprefix('icloud_')
                 if not getattr(s,service+'_enabled'):raise ValueError('Verbindung zuerst aktivieren')
                 start=datetime.now(ZoneInfo('Europe/Berlin')).replace(hour=0,minute=0,second=0,microsecond=0)
-                result=await worker.personal.refresh(kind,start,start+timedelta(days=1),force=True) if kind=='calendar' else await worker.personal.refresh(kind,force=True)
+                try:
+                    operation=worker.personal.refresh(kind,start,start+timedelta(days=1),force=True) if kind=='calendar' else worker.personal.refresh(kind,force=True)
+                    result=await asyncio.wait_for(operation,timeout=20)
+                except TimeoutError:
+                    raise HTTPException(504,'iCloud-Test nach 20 Sekunden beendet. Apple antwortet zu langsam oder ein Abruf läuft noch. Bitte später erneut testen.')
                 if not result or result['stale']:raise HTTPException(502,worker.personal.status.get(service,{}).get('error','iCloud-Abruf fehlgeschlagen; bitte erneut versuchen.'))
                 return {'ok':True,'message':'iCloud lesend verbunden · '+str(len(result['records']))+(' Termine im Testzeitraum' if kind=='calendar' else ' Kontakte')+' · Sammlungen: '+', '.join(result['collections'])}
             if service=='llm':

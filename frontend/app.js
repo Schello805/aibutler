@@ -6,6 +6,7 @@ let contextDirty=false;
 let currentUser=null;
 let publicServices={weather:false,holidays:false};
 let manualLocation=null,locationMemory=null;
+let locationQuestion=null;
 let authRevision=0;
 const broadcastAuth=()=>localStorage.setItem('butler-auth-event',Date.now()+'-'+Math.random());
 let bootstrapAccount=false;
@@ -26,6 +27,9 @@ function answerBubble(result){
   answer.querySelector('.message-role').textContent=result.answer_mode==='live'?'BUTLER · LIVE-ABFRAGE':result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
   if(result.ai_issue){const status=node('small','answer-status',result.ai_issue.includes('429')?'KI-Anfragelimit erreicht · lokale Antwort':'KI-Auswertung nicht verfügbar · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
   if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
+  if(result.clarification==='location'){
+    const choose=node('button','evidence-link','Ort angeben');choose.type='button';choose.onclick=()=>{$('location-dialog').showModal();};answer.append(choose);
+  }
   return answer;
 }
 async function loadConversations(){
@@ -43,6 +47,7 @@ async function openConversation(id){
   catch(e){notice(e.message);}
 }
 function newConversation(){
+  locationQuestion=null;
   if(chatBusy)return;
   stopVoice();setMic(false);conversationId=null;localStorage.removeItem(conversationKey());$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('mic').focus();
 }
@@ -244,6 +249,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
+  locationQuestion=null;
   const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   stopVoice();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
@@ -334,6 +340,7 @@ $('chat-form').onsubmit = async event => {
     if(currentUser?.id!==actor)return;
     progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
+    locationQuestion=result.clarification==='location'?{message:result.pending_question||message,actor,conversationId}:null;
     loadConversations().catch(()=>{});
     if ($('speak').checked && 'speechSynthesis' in window) {
       const turn=voiceEpoch;
@@ -438,10 +445,16 @@ async function getDeviceLocation(){
   if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');
   $('location-status').textContent=location.label+' · ungefährer Gerätestandort'+(locationMemory?.key===key&&locationMemory.regionUnavailable?' · Region derzeit nicht ermittelbar; Ort bei Bedarf manuell wählen':'');return location;
 }
+function resumeLocationQuestion(){
+  const pending=locationQuestion;locationQuestion=null;
+  if(!pending||pending.actor!==currentUser?.id||pending.conversationId!==conversationId)return;
+  if(chatBusy){locationQuestion=pending;setTimeout(resumeLocationQuestion,100);return;}
+  $('question').value=pending.message;$('chat-form').requestSubmit();
+}
 $('choose-location').onclick=()=>{$('location-dialog').showModal();};
-$('location-current').onclick=async()=>{const revision=authRevision;$('use-device-location').checked=true;sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;try{await getDeviceLocation();if(revision!==authRevision)return;localStorage.setItem('butler-device-location-'+currentUser.id,'true');$('location-dialog').close();}catch(e){if(revision!==authRevision)return;$('use-device-location').checked=false;$('location-results').textContent='Standort nicht verfügbar: '+e.message;}};
+$('location-current').onclick=async()=>{const revision=authRevision;$('use-device-location').checked=true;sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;try{await getDeviceLocation();if(revision!==authRevision)return;localStorage.setItem('butler-device-location-'+currentUser.id,'true');$('location-dialog').close();resumeLocationQuestion();}catch(e){if(revision!==authRevision)return;$('use-device-location').checked=false;$('location-results').textContent='Standort nicht verfügbar: '+e.message;}};
 $('location-close').onclick=()=>$('location-dialog').close();
-$('location-search-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;$('location-results').textContent='Suche …';try{const result=await api('locations/search',{method:'POST',body:JSON.stringify({query:$('location-query').value})});if(revision!==authRevision)return;$('location-results').replaceChildren();for(const location of result.locations){const button=node('button','secondary',location.label);button.type='button';button.onclick=()=>{manualLocation=location;sessionStorage.setItem('butler-manual-location-'+currentUser.id,JSON.stringify(location));$('use-device-location').checked=false;localStorage.setItem('butler-device-location-'+currentUser.id,'false');$('location-status').textContent=location.label+' · manuell, bis zum Abmelden';$('location-dialog').close();};$('location-results').append(button);}if(!result.locations.length)$('location-results').textContent='Kein Ort gefunden.';}catch(e){if(revision===authRevision)$('location-results').textContent=e.message;}};
+$('location-search-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;$('location-results').textContent='Suche …';try{const result=await api('locations/search',{method:'POST',body:JSON.stringify({query:$('location-query').value})});if(revision!==authRevision)return;$('location-results').replaceChildren();for(const location of result.locations){const button=node('button','secondary',location.label);button.type='button';button.onclick=()=>{manualLocation=location;sessionStorage.setItem('butler-manual-location-'+currentUser.id,JSON.stringify(location));$('use-device-location').checked=false;localStorage.setItem('butler-device-location-'+currentUser.id,'false');$('location-status').textContent=location.label+' · manuell, bis zum Abmelden';$('location-dialog').close();resumeLocationQuestion();};$('location-results').append(button);}if(!result.locations.length)$('location-results').textContent='Kein Ort gefunden.';}catch(e){if(revision===authRevision)$('location-results').textContent=e.message;}};
 
 const services = [
   {id:'llm', title:'KI-Anbieter', icon:'✧', description:'Für Analyse und Antworten. Wähle deinen Anbieter und lade die Modelle mit deinem API-Key.', fields:[
@@ -593,8 +606,8 @@ async function testService(id,button) {
   if(savingServices.has(id)) return setServiceStatus(id,'Speichern läuft noch …');
   if(dirtyServices.has(id)) return setServiceStatus(id,'Bitte diese Verbindung zuerst speichern, dann testen.','error');
   button.disabled=true;setServiceStatus(id,'Verbindung wird geprüft …');
-  try {let location=null;if(['weather','holidays'].includes(id)){location=await getDeviceLocation();if(!location)throw new Error('Bitte im Chat einen Ort wählen oder den Gerätestandort freigeben.');} const result=await api('connections/'+id+(location?'/preview':'/test'),{method:'POST',...(location?{body:JSON.stringify(location)}:{})});setServiceStatus(id,result.message,'success'); }
-  catch(e) { setServiceStatus(id,e.message,'error'); }
+  try {let location=null;if(['weather','holidays'].includes(id)){location=await getDeviceLocation();if(!location)throw new Error('Bitte im Chat einen Ort wählen oder den Gerätestandort freigeben.');} const result=await api('connections/'+id+(location?'/preview':'/test'),{method:'POST',signal:AbortSignal.timeout(25000),...(location?{body:JSON.stringify(location)}:{})});setServiceStatus(id,result.message,'success'); }
+  catch(e) { setServiceStatus(id,e.name==='TimeoutError'?'Verbindungstest nach 25 Sekunden beendet. Bitte Dienst oder Proxy prüfen.':e.message,'error'); }
   finally { button.disabled=false; }
 }
 async function loadModels() {

@@ -259,6 +259,9 @@ class PersonalSources:
                 self.retry.pop(scope,None)
                 self.status[key]={'checked':datetime.now(ZoneInfo('UTC')).isoformat(),'fetched':len(data['records']),'running':False}
                 return {**data,'checked':time.time(),'stale':False}
+            except asyncio.CancelledError:
+                self.status[key]={**previous_status,'running':False,'error':'iCloud-Abruf abgebrochen oder Zeitlimit erreicht. Bisherige Daten bleiben erhalten.'}
+                raise
             except Exception as exc:
                 self.retry[scope]=time.monotonic()+60
                 self.status[key]={**previous_status,'error':icloud_error(exc,dav.stage if 'dav' in locals() else 'Konfiguration'),'running':False}
