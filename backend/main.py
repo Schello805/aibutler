@@ -118,12 +118,12 @@ def create_app(settings=None):
 
     class NewAccount(BaseModel):
         email:str=Field(min_length=3,max_length=254)
-        password:str=Field(min_length=12,max_length=1024)
+        password:str=Field(min_length=8,max_length=1024)
         role:Annotated[str,Field(pattern=r'^(admin|member)$')]='member'
 
     class PasswordChange(BaseModel):
         current_password:str=Field(min_length=1,max_length=1024)
-        new_password:str=Field(min_length=12,max_length=1024)
+        new_password:str=Field(min_length=8,max_length=1024)
 
     class AccountState(BaseModel):
         active:bool

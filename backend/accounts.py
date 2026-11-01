@@ -19,8 +19,8 @@ def normalize_email(email):
 
 
 def password_hash(password):
-    if not 12<=len(password)<=1024:
-        raise ValueError('Das Passwort muss 12 bis 1024 Zeichen lang sein.')
+    if not 8<=len(password)<=1024:
+        raise ValueError('Das Passwort muss 8 bis 1024 Zeichen lang sein.')
     return HASHER.hash(password)
 
 

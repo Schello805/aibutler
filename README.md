@@ -138,9 +138,11 @@ Im LXC einmal das erste Konto anlegen:
 aibutler user add deine@email.de
 ```
 
-Die E-Mail-Adresse durch deine gewünschte Anmeldeadresse ersetzen. Das Terminal fragt das Passwort verdeckt zweimal ab; mindestens zwölf Zeichen verwenden. Das Passwort gehört **nicht** in den Befehl, die Shell-History oder einen Chat. Das erste Konto ist automatisch Administrator. Alternativ kann die Ersteinrichtung über die lokale Oberfläche bzw. den SSH-Tunnel erfolgen; über die öffentliche Domain gibt es keine offene Selbstregistrierung.
+Die E-Mail-Adresse durch deine gewünschte Anmeldeadresse ersetzen. Das Terminal fragt das Passwort verdeckt zweimal ab; mindestens acht Zeichen verwenden. Das Passwort gehört **nicht** in den Befehl, die Shell-History oder einen Chat. Das erste Konto ist automatisch Administrator. Alternativ kann die Ersteinrichtung über die lokale Oberfläche bzw. den SSH-Tunnel erfolgen; über die öffentliche Domain gibt es keine offene Selbstregistrierung.
 
-Danach die HTTPS-Adresse auf Handy oder PC öffnen und mit E-Mail-Adresse und Passwort anmelden. **„Angemeldet bleiben“** speichert eine widerrufbare Sitzung für 30 Tage; ohne Häkchen wird ein Browser-Sitzungscookie mit maximal zwölf Stunden serverseitiger Gültigkeit verwendet. Normale Updates behalten die Konten und Sitzungen bei. Die E-Mail-Adresse dient als Anmeldename; die App versendet keine Registrierungs- oder Passwort-Reset-E-Mails.
+Danach die HTTPS-Adresse auf Handy oder PC öffnen und mit E-Mail-Adresse und Passwort anmelden. **„Angemeldet bleiben“** speichert eine widerrufbare Sitzung für 30 Tage; ohne Häkchen wird ein Browser-Sitzungscookie mit maximal zwölf Stunden serverseitiger Gültigkeit verwendet. Normale Updates behalten die Konten und Sitzungen bei. Das eigene Passwort lässt sich jederzeit unter **Einstellungen → Mein Konto → Passwort ändern** ändern, für Administratoren und Mitglieder. Dafür das aktuelle und das neue Passwort eingeben. Ohne bekanntes aktuelles Passwort ist ein Zurücksetzen im LXC über `aibutler user passwd EMAIL` möglich.
+
+Die E-Mail-Adresse dient als Anmeldename; die App versendet keine Registrierungs- oder Passwort-Reset-E-Mails.
 
 Unter **Einstellungen → Benutzerkonten** können Administratoren weitere Konten anlegen und sperren. Mitglieder können die verbundenen Quellen gemeinsam nutzen und Fragen stellen. Nur Administratoren ändern Verbindungen, Projektkontext und Benutzerkonten. **Gesprächsverläufe sind je Konto getrennt.** Das erste Administratorkonto übernimmt die bisherigen, noch keinem Konto zugeordneten Gespräche. Es gibt keine getrennten Quellenbestände pro Person; wer Zugriff bekommt, kann Inhalte aus den gemeinsamen Quellen abfragen.
 
@@ -204,10 +206,20 @@ Als normaler Benutzer `sudo aibutler update`. Der Befehl lädt auch die aktuelle
 Ein Update:
 
 1. Lädt den Quellcode in ein neues Release-Verzeichnis.
-2. Installiert dessen Python-Umgebung und führt Paketprüfung sowie die automatischen Tests aus. Der bisherige Dienst läuft währenddessen weiter.
+2. Verwendet bei unveränderten Anforderungen die vorhandene Python-Umgebung weiter. Bei geänderten Paketanfordernissen, Python-/Sprachkonfiguration oder nach sieben Tagen wird eine neue Umgebung erstellt. Paketprüfung und automatische Tests laufen weiterhin; der bisherige Dienst bleibt währenddessen verfügbar.
 3. Hält den Dienst kurz an und sichert den privaten Datenbestand und die Dienstkonfiguration.
 4. Schaltet auf das neue Release um und prüft den Start über `/healthz`.
 5. Setzt bei einem Fehler nach der Umschaltung Code, Daten und Dienstkonfiguration aus dem vorigen Backup zurück, soweit diese Wiederherstellung erfolgreich möglich ist. Fehler werden ausgegeben; Logs/Backup bleiben verfügbar.
+
+**Schnellere Updates:** Bereits vorhandene Systempakete werden nicht erneut installiert; Paketdownloads werden zwischengespeichert. Python-Umgebungen werden unverändert zwischen Releases geteilt und für Rollbacks aufbewahrt. Nach dem Wechsel auf diese Update-Logik wird einmal eine solche Umgebung erstellt; nachfolgende Updates profitieren von der Wiederverwendung. Backups verwenden schnellere gzip-Kompression bei identischem Datenumfang. Die tatsächliche Dauer hängt weiterhin von Datenmenge, Netzwerk und nötigen Paketänderungen ab.
+
+Um sofort frische Python-Paketversionen aufzulösen, statt eine jüngere Umgebung wiederzuverwenden:
+
+```bash
+aibutler update --refresh-deps
+```
+
+Die Sieben-Tage-Prüfung erfolgt bei einem Update-Aufruf; sie ist kein automatischer Update-Dienst. System-Sicherheitsupdates des Betriebssystems weiterhin separat installieren. Alte Runtime-Verzeichnisse unter `/opt/aibutler/runtimes` nicht entfernen, solange aktuelle oder für Rollbacks aufbewahrte Releases sie verwenden.
 
 **Erhalten bleiben:** Zugangsdaten, Quellenkonfiguration, Gespräche mit Belegen, Projektkontext, Dokument-/Mailindex und Importfortschritt. Das Backup wird bei angehaltenem Dienst erstellt, damit SQLite konsistent ist. Bei der Umstellung sind laufende Anfragen kurz nicht verfügbar; deshalb Updates außerhalb eines aktiven Sprach-/Chatgesprächs ausführen.
 

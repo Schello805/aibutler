@@ -126,6 +126,22 @@ def test_expired_and_legacy_sessions_are_rejected(tmp_path):
 def test_validation_errors_do_not_echo_passwords(tmp_path):
     app=app_for(tmp_path)
     with TestClient(app) as client:
-        response=client.post('/api/accounts',headers={'Authorization':'Bearer internal-test'},json={'email':'owner@example.org','password':'secretshort'})
-        assert response.status_code==422 and 'secretshort' not in response.text
+        response=client.post('/api/accounts',headers={'Authorization':'Bearer internal-test'},json={'email':'owner@example.org','password':'secret!'})
+        assert response.status_code==422 and 'secret!' not in response.text
         assert all('input' not in error for error in response.json()['detail'])
+
+
+@pytest.mark.parametrize('role',['admin','member'])
+def test_eight_character_passwords_and_repeated_self_service_changes(tmp_path,role):
+    app=app_for(tmp_path)
+    app.state.accounts.create('owner@example.org',PASSWORD)
+    user=app.state.accounts.create(role+'@example.org','eight123',role)
+    with TestClient(app,base_url='https://testserver') as client:
+        assert login(client,user['email'],'eight123').status_code==200
+        assert client.post('/api/account/password',headers=ORIGIN,json={'current_password':'eight123','new_password':'seven12'}).status_code==422
+        for current,new in [('eight123','newpass8'),('newpass8','nextpass')]:
+            assert client.post('/api/account/password',headers=ORIGIN,json={'current_password':current,'new_password':new}).status_code==200
+            assert client.get('/api/status').status_code==200
+        client.delete('/api/session',headers=ORIGIN)
+        assert login(client,user['email'],'eight123').status_code==401
+        assert login(client,user['email'],'nextpass').status_code==200

@@ -43,7 +43,7 @@ def backup():
     os.chmod(BACKUPS, 0o700)
     target = Path(tempfile.mkdtemp(prefix=stamp() + '-', dir=BACKUPS))
     try:
-        with tarfile.open(target / 'data.tar.gz', 'w:gz') as archive:
+        with tarfile.open(target / 'data.tar.gz', 'w:gz', compresslevel=1) as archive:
             archive.add(DATA, arcname='data', filter=archive_filter)
         for path in (CONFIG / 'install.json', CONFIG / 'service.env', UNIT):
             if path.is_file():
@@ -165,7 +165,7 @@ def user_command(arguments):
     email=normalize_email(arguments[1]) if action!='list' else None
     password=None
     if action in ('add','passwd'):
-        password=getpass.getpass('Passwort (mindestens 12 Zeichen): ')
+        password=getpass.getpass('Passwort (mindestens 8 Zeichen): ')
         if password!=getpass.getpass('Passwort wiederholen: '):raise ValueError('Die Passwörter stimmen nicht überein')
     with service_identity():
         accounts=Accounts(Store(DATA))

@@ -217,7 +217,7 @@ async function showLogin(message=''){
   try{const config=await api('auth/config');if(revision!==authRevision)return;bootstrapAccount=!config.configured&&config.bootstrap_local;
     $('login-title').textContent=bootstrapAccount?'Dein Konto einrichten.':'Schön, dass du da bist.';
     $('login-description').textContent=!config.configured&&!config.bootstrap_local?'Noch kein Konto vorhanden. Im LXC einmal aibutler user add EMAIL ausführen.':bootstrapAccount?'Lege dein erstes Administratorkonto an. Bestehende Quellen und Gespräche bleiben erhalten.':'Mit deiner E-Mail-Adresse und deinem Passwort anmelden.';
-    $('password-confirm-label').hidden=!bootstrapAccount;$('login-password-confirm').required=bootstrapAccount;$('login-password').minLength=bootstrapAccount?12:1;$('login-password').autocomplete=bootstrapAccount?'new-password':'current-password';$('remember-label').hidden=bootstrapAccount;
+    $('password-confirm-label').hidden=!bootstrapAccount;$('login-password-confirm').required=bootstrapAccount;$('login-password').minLength=bootstrapAccount?8:1;$('login-password').autocomplete=bootstrapAccount?'new-password':'current-password';$('remember-label').hidden=bootstrapAccount;
     $('login-submit').textContent=bootstrapAccount?'Konto erstellen ↗':'Anmelden ↗';$('login-submit').disabled=!config.configured&&!config.bootstrap_local;
   }catch(e){$('login-error').textContent=e.message;}
 }

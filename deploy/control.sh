@@ -8,7 +8,7 @@ case "${1:-help}" in
     help|--help|-h)
         cat <<'HELP'
 AI Butler verwalten (als root oder mit sudo):
-  aibutler update [--domain HOST --proxy-ip IP] [--no-speech|--speech] [--ref REF]
+  aibutler update [--domain HOST --proxy-ip IP] [--no-speech|--speech] [--ref REF] [--refresh-deps]
   aibutler status              Dienststatus
   aibutler logs                Letzte 100 Logzeilen und Live-Protokoll
   aibutler restart             Dienst neu starten

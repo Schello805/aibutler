@@ -155,3 +155,7 @@ def test_restore_does_not_resurrect_previously_revoked_sessions(tmp_path,monkeyp
     restored=Accounts(Store(data))
     assert restored.session(token) is None
     assert restored.authenticate(user['email'],'a-long-example-passphrase','test')
+
+
+def test_installer_accepts_forced_dependency_refresh():
+    assert installer('--refresh-deps').returncode==0

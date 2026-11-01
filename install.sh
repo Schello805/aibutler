@@ -17,6 +17,7 @@ DOMAIN=''
 PROXY_IP=''
 SPEECH=true
 CHECK=false
+REFRESH_DEPS=false
 INSTALL_TEMP=''
 OLD_RELEASE=''
 BACKUP=''
@@ -38,6 +39,7 @@ AI Butler – Installation und Update (Debian 12+/Ubuntu 24.04+, systemd)
   --local-only        Nur Loopback; bestehende Domain/Proxy-IP entfernen
   --no-speech         Ohne lokales Sprachmodell und Sprach-Abhängigkeiten
   --speech            Lokale Sprache aktivieren (Standard der Erstinstallation)
+  --refresh-deps      Python-Pakete frisch auflösen (sonst Wiederverwendung bis 7 Tage)
   --ref REF           Git-Branch, Tag oder Commit; Standard main
   --port PORT         Backend-Port; Standard 8010
   --update            Bestehende verwaltete Installation aktualisieren
@@ -84,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --ref) need_value "$@"; REF=$2; shift 2 ;;
         --no-speech) SPEECH=false; shift ;;
         --speech) SPEECH=true; shift ;;
+        --refresh-deps) REFRESH_DEPS=true; shift ;;
         --local-only) DOMAIN=''; PROXY_IP=''; shift ;;
         *) die "Unbekannte Option: $1 (siehe --help)" ;;
     esac
@@ -183,9 +186,17 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-log 'Systempakete installieren …'
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-venv libgomp1
+missing_packages=()
+for package in ca-certificates curl git python3 python3-venv libgomp1; do
+    if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) != 'install ok installed' ]]; then missing_packages+=("$package"); fi
+done
+if ((${#missing_packages[@]})); then
+    log 'Fehlende Systempakete installieren …'
+    apt-get update
+    apt-get install -y --no-install-recommends "${missing_packages[@]}"
+else
+    log 'Benötigte Systempakete bereits vorhanden.'
+fi
 if getent passwd aibutler >/dev/null; then
     python3 - "$APP_DATA" <<'PYUSER'
 import grp,pwd,sys
@@ -212,11 +223,12 @@ SHA=$(git -C "$INSTALL_TEMP/source" rev-parse HEAD)
 RELEASE="$APP_ROOT/releases/$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}"
 [[ ! -e $RELEASE ]] || die 'Release-Verzeichnis existiert bereits. Kurz warten und erneut versuchen.'
 mv "$INSTALL_TEMP/source" "$RELEASE"
-for file in backend/main.py deploy/maintenance.py deploy/control.sh deploy/aibutler.service frontend/tailwind.css; do [[ -f $RELEASE/$file ]] || die "Revision enthält keine vollständige Installer-Version: $file"; done
-log 'Neue Python-Umgebung vorbereiten (der bisherige Dienst läuft weiter) …'
-python3 -m venv "$RELEASE/.venv"
-"$RELEASE/.venv/bin/python" -m pip install --disable-pip-version-check -r "$RELEASE/requirements.txt"
-if $SPEECH; then "$RELEASE/.venv/bin/python" -m pip install --disable-pip-version-check -r "$RELEASE/requirements-speech.txt"; fi
+for file in backend/main.py deploy/runtime.py deploy/maintenance.py deploy/control.sh deploy/aibutler.service frontend/tailwind.css; do [[ -f $RELEASE/$file ]] || die "Revision enthält keine vollständige Installer-Version: $file"; done
+log 'Python-Abhängigkeiten vorbereiten (der bisherige Dienst läuft weiter) …'
+runtime_options=()
+if $REFRESH_DEPS; then runtime_options+=(--refresh); fi
+RUNTIME=$(python3 "$RELEASE/deploy/runtime.py" --root "$APP_ROOT/runtimes" --release "$RELEASE" --speech "$SPEECH" "${runtime_options[@]}")
+ln -s "$RUNTIME" "$RELEASE/.venv"
 "$RELEASE/.venv/bin/python" -m pip check
 "$RELEASE/.venv/bin/python" -m compileall -q "$RELEASE/backend"
 log 'Automatische Tests der neuen Version …'

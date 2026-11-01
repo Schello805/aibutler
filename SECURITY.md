@@ -20,6 +20,10 @@ Die automatisierten Tests prüfen unter anderem Kontoisolation, Rollen, Widerruf
 
 `pip-audit` hat am 31.10.2026 für die 47 tatsächlich in der lokalen Entwicklungsumgebung installierten Pakete keine bekannten Schwachstellen gemeldet. Das ist eine Momentaufnahme bekannter Meldungen, keine Sicherheitsgarantie. Der Paketstand im LXC kann abweichen und wurde nicht direkt geprüft. Eine separate, temporäre Tool-Umgebung wurde verwendet; private Konfiguration oder Dokumentinhalte wurden nicht an den Prüfdienst übertragen.
 
+## Paketaktualisierung bei schnelleren Updates
+
+Unveränderte Python-Abhängigkeiten werden bis zu sieben Tage in einer unveränderten Umgebung wiederverwendet. Geänderte Paketanforderungen oder Python-/Sprachkonfiguration erzeugen eine neue Umgebung; `aibutler update --refresh-deps` erzwingt dies sofort. Alte Umgebungen bleiben für Rollbacks erhalten. Die automatische Altersprüfung findet beim Update-Aufruf statt und ersetzt keine regelmäßigen Betriebssystem- und Anwendungsupdates. Passwörter sind auf Wunsch ab acht Zeichen zulässig; Argon2id, Fehlversuchsbegrenzung und Sitzungssperren bleiben aktiv.
+
 ## Betrieb und verbleibende Grenzen
 
 1. Updates installieren, bevor die Anwendung über den Proxy verwendet wird: `aibutler update`.
