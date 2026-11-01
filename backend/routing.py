@@ -34,6 +34,8 @@ def route_question(question,last=None):
         sources=['smart_home','paperless'] if scope=='device' else ['paperless','smart_home'] if scope=='usage' else ['email','paperless']
         queries=['Strom Abschlag Vorauszahlung'] if scope=='advance' else ['Strom Arbeitspreis Grundpreis','Strom Preisänderung Tarif'] if scope=='tariff' else [enriched[:200],'Strom Arbeitspreis Tarif']
         return {'kind':'sources','message':enriched,'plan':RetrievalPlan(intent='smart_home' if scope=='device' else 'documents',queries=queries,sources=sources,recent=True,smart_queries=[enriched[:200]] if 'smart_home' in sources else [])}
+    from .retrieval import license_question
+    if license_question(text):return {'kind':'sources','message':text,'plan':RetrievalPlan(queries=['Führerschein','Fahrerlaubnis'],sources=['paperless'])}
     sources=[]
     if re.search(r'e-?mail|postfach|nachricht|geschrieben',lower):sources.append('email')
     if re.search(r'paperless|dokument|rechnung|beleg',lower):sources.append('paperless')

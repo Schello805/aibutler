@@ -190,7 +190,15 @@ def evidence_excerpt(body,query,matched=''):
     return text[:2000]+'\n[… weiterer Dokumentauszug …]\n'+text[start:start+7900]
 
 
+def license_question(question):
+    return bool(re.search(r'führerschein|fuehrerschein|fahrerlaubnis',question,re.I))
+
+
 def relevant_evidence(question,title,body):
+    if license_question(question):
+        if re.search(r'newsletter|ratgeber|reform|versicherung|angebot|rechnung|jobs?|handbuch|anleitung',title,re.I):return False
+        return bool(re.search(r'führerschein|fuehrerschein|fahrerlaubnis|prüfungsbescheinigung',title,re.I))
+
     if re.search(r'paket|lieferung|zustell|geklingelt|klingel',question,re.I) and re.search(r'newsletter|rabatt|sonderangebot|stellenangebot',title,re.I):
         return False
     if not re.search(r'wartung|gewartet',question,re.I):

@@ -42,6 +42,7 @@ class Store:
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(item_id UNINDEXED, title, body);
             CREATE TABLE IF NOT EXISTS context(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT);
             INSERT OR IGNORE INTO context VALUES(1, '{"projects":[]}');
+            CREATE TABLE IF NOT EXISTS paperless_text_cache(item_id TEXT PRIMARY KEY,version TEXT,body TEXT,checked TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, item_id TEXT, title TEXT, reason TEXT, sent INTEGER DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
             ''')
             if 'flags' not in {row['name'] for row in db.execute('PRAGMA table_info(analysis_queue)')}:
@@ -414,6 +415,14 @@ class Store:
         with self.connect() as db:
             rows=list(db.execute("SELECT owner,request_id FROM chat_turns WHERE status='pending'"))
         for row in rows:self.fail_turn(row['owner'],row['request_id'])
+
+    def document_text_cache(self,item_id,version):
+        with self.connect() as db:
+            row=db.execute('SELECT body FROM paperless_text_cache WHERE item_id=? AND version=?',(item_id,version)).fetchone()
+            return row['body'] if row else None
+
+    def save_document_text_cache(self,item_id,version,body):
+        with self.connect() as db:db.execute('INSERT OR REPLACE INTO paperless_text_cache(item_id,version,body) VALUES(?,?,?)',(item_id,version,body))
 
     def turn_result(self,owner_id,request_id):
         with self.connect() as db:

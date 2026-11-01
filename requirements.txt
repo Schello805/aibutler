@@ -11,3 +11,7 @@ vobject>=0.9.9,<1
 defusedxml>=0.7,<1
 fastembed>=0.9,<1
 qdrant-client>=1.16,<2
+
+# Local extraction of selected image/PDF documents
+pypdfium2>=4.30,<6
+Pillow>=11,<13

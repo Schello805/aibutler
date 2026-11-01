@@ -555,3 +555,13 @@ Bei klaren Dokumentfragen mit starken passenden Belegen im lokalen Index nutzt d
 Die semantische Quellenauswahl kennt zusätzlich „allgemeine Frage“ und „Rückfrage nötig“. Leere Quellenlisten dieser beiden Fälle werden nicht automatisch mit sämtlichen Diensten aufgefüllt.
 
 Kurze direkte Gesprächsantworten und die erste Klärung einer mehrdeutigen Frage benötigen keinen freien Rechercheplatz. Sie bleiben dadurch auch bei zwei laufenden Recherchen verfügbar. Die Recherche hat ein Gesamtzeitlimit von 30 Sekunden; danach erhält die gespeicherte Frage einen verständlichen Unterbrechungshinweis. Das ist eine Notbremse gegen minutenlange stille Wartezeiten, keine Zusage einer vollständigen Antwort in 30 Sekunden. Externe KI und lokale Hardware beeinflussen weiterhin die tatsächliche Dauer.
+
+### Bilddokumente und Führerscheinfragen
+
+Bei Fragen zu Führerschein-Erteilungsdaten werden persönliche Führerscheinbelege gezielt in Paperless gesucht. Newsletter, Versicherungen, Stellenanzeigen und Handbücher sind dafür keine passenden Belege und werden ausgeschlossen. Das Dokument- oder Scandatum wird nicht als Erwerbsdatum verwendet; Karten-Ausstellungsdatum und Erteilungsdatum je Klasse sind getrennt zu betrachten.
+
+Fehlen Klassen-/Datumszeilen im Suchauszug, liest der Butler das ausgewählte Dokument nochmals direkt über die Paperless-API. Reicht deren Text nicht aus, lädt er ausschließlich dieses Original zur **lokalen** OCR mit Tesseract. Bilder oder vollständige Ausweisdokumente werden nicht an eine externe Vision-API gesendet. Für die freigegebene Chat-KI wird nur ein minimierter Klassen-/Datumsauszug bereitgestellt. Nicht lesbare oder unklar zugeordnete Daten führen zu einer gezielten Rückfrage.
+
+`aibutler update` installiert Tesseract mit deutschen/englischen Sprachdaten sowie die Python-Bibliotheken für lokale PDF-/Bildverarbeitung. In einer manuellen Entwicklungsinstallation zusätzlich Tesseract installieren und die aktualisierte `requirements.txt` einspielen. Die gezielte OCR verarbeitet maximal die ersten zwei PDF-Seiten, Dateien bis 20 MB und Bilder bis 16 Megapixeln; gedrehte Bilder werden innerhalb eines begrenzten Zeitbudgets versucht. Ein unlesbarer Scan kann trotzdem eine bessere Aufnahme benötigen.
+
+OCR-Ergebnisse werden lokal in SQLite zwischengespeichert; bei geänderten Paperless-Metadaten werden sie neu erzeugt. Temporäre Bilder werden nach der Verarbeitung entfernt. Es gibt keine Rückschreibung oder Änderung des Originals in Paperless. Feldbeschreibung des Kartenführerscheins: https://www.gesetze-im-internet.de/fev_2010/anlage_8.html

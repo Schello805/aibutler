@@ -4,6 +4,7 @@ from email.utils import parsedate_to_datetime, parseaddr
 from datetime import timezone
 from datetime import datetime, timedelta
 import hashlib
+import re
 import imaplib
 from urllib.parse import urljoin, urlsplit, parse_qs
 import httpx
@@ -149,3 +150,30 @@ async def search_paperless(s,queries):
                 item={'id':f'paperless:{instance}:{doc["id"]}','version':hashlib.sha256((title+'\n'+body).encode()).hexdigest(),'title':title,'body':body,'source':'paperless','document_date':doc.get('created',''),'filename':doc.get('original_file_name','')}
                 result[item['id']]=item
     return list(result.values())
+
+
+async def paperless_document_text(s,item_id,cache_get,cache_save):
+    """Fetch only an explicitly selected document, then OCR locally if content is missing."""
+    import asyncio
+    from .document_text import ocr_original,class_excerpt
+    base=s.paperless_url.rstrip('/')+'/'
+    instance=hashlib.sha256(base.encode()).hexdigest()[:12]
+    match=re.fullmatch(r'paperless:'+instance+r':(\d+)',item_id)
+    if not match:raise ValueError('Dokument gehört nicht zur aktuellen Paperless-Verbindung')
+    headers={'Authorization':'Token '+s.paperless_token}
+    async with httpx.AsyncClient(timeout=6,follow_redirects=False,trust_env=False) as client:
+        response=await client.get(base+'api/documents/'+match[1]+'/',headers=headers)
+        response.raise_for_status();document=response.json()
+        if class_excerpt(document.get('content') or ''):return document['content'][:200000],False
+        version=hashlib.sha256(('license-tsv-v1|'+str(document.get('modified',''))+'|'+str(document.get('checksum',''))+'|'+str(document.get('original_file_name',''))).encode()).hexdigest()
+        cached=await asyncio.to_thread(cache_get,item_id,version)
+        if cached is not None:return cached,True
+        data=bytearray()
+        async with client.stream('GET',base+'api/documents/'+match[1]+'/download/',params={'original':'true'},headers=headers) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                data.extend(chunk)
+                if len(data)>20*1024*1024:raise ValueError('Dokument zu groß für lokale Texterkennung')
+    text=await asyncio.to_thread(ocr_original,bytes(data))
+    if text:await asyncio.to_thread(cache_save,item_id,version,text)
+    return text,True

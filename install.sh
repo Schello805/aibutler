@@ -192,7 +192,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 missing_packages=()
-for package in ca-certificates curl git python3 python3-venv libgomp1; do
+for package in ca-certificates curl git python3 python3-venv libgomp1 tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng; do
     if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) != 'install ok installed' ]]; then missing_packages+=("$package"); fi
 done
 if ((${#missing_packages[@]})); then
