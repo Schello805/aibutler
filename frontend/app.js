@@ -122,11 +122,23 @@ function validationMessage(details) {
   });
   return [...new Set(messages)].join(' ')||'Bitte prüfe deine Eingaben.';
 }
+// Proxy failures often return HTML. Never treat them as malformed speech/JSON.
+async function readApiResponse(response){
+  const body=await response.json().catch(()=>null);
+  if(!response.ok){
+    if(typeof body?.detail==='string')throw new Error(body.detail);
+    if([502,503,504].includes(response.status))throw new Error('Der Butler-Dienst ist vorübergehend nicht erreichbar (HTTP '+response.status+'). Bitte kurz warten und erneut versuchen.');
+    throw new Error(response.status===422?validationMessage(body?.detail):'Der Butler antwortet mit HTTP '+response.status+'. Bitte erneut versuchen.');
+  }
+  if(body===null)throw new Error('Der Butler hat keine gültige Antwort geliefert. Bitte erneut versuchen.');
+  return body;
+}
+// End response decoding.
 async function api(path, options = {}) {
   const revision=authRevision;
   const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
-  if (!response.ok) { if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.'); const body = await response.json().catch(()=>({})); throw new Error(typeof body.detail === 'string' ? body.detail : response.status===422?validationMessage(body.detail):'Der Butler ist gerade nicht erreichbar (HTTP '+response.status+'). Bitte erneut versuchen.'); }
-  return response.json();
+  if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.');
+  return readApiResponse(response);
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
 function renderContext(){
@@ -335,7 +347,7 @@ $('chat-form').onsubmit = async event => {
       }else{voiceConversation=false;voiceState('idle','Keine lokale deutsche Stimme verfügbar');}
     }else{voiceConversation=false;voiceState('idle');}
 
-  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();bubble(search.controller.signal.aborted?'Suche abgebrochen.':'Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally {search.finish(); if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
+  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();if(!search.controller.signal.aborted&&!$('question').value){$('question').value=message;$('text-entry').open=true;autoSizeQuestion();}bubble(search.controller.signal.aborted?'Suche abgebrochen.':'Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally {search.finish(); if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
 };
 for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem('butler-'+id)!=='false';
@@ -379,7 +391,7 @@ async function startLocalRecording(){
       try{
         const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
         const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream'},body:audio});
-        const result=await response.json();if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'Spracherkennung fehlgeschlagen.');if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
+        const result=await readApiResponse(response);if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
         $('question').value=result.text;$('question').dispatchEvent(new Event('input'));
         if($('voice-send').checked&&!chatBusy)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle','Frage erkannt · Text prüfen und senden');$('text-entry').open=true;}
       }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='AbortError'?'Spracherkennung dauert zu lange · bitte erneut versuchen':e.message);}}
@@ -416,15 +428,15 @@ async function getDeviceLocation(){
     else{
       try{
         const params=new URLSearchParams({latitude,longitude,localityLanguage:'de'});
-        const response=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?'+params,{signal:AbortSignal.timeout(8000),credentials:'omit',referrerPolicy:'no-referrer',redirect:'error'});
+        const response=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?'+params,{signal:AbortSignal.timeout(2500),credentials:'omit',referrerPolicy:'no-referrer',redirect:'error'});
         if(!response.ok)throw new Error('Region nicht verfügbar');const data=await response.json();
         const region={country:/^[A-Z]{2}$/.test(data.countryCode)?data.countryCode:'',subdivision:/^[A-Z]{2}-[A-Z0-9]{1,6}$/.test(data.principalSubdivisionCode)?data.principalSubdivisionCode:'',label:[data.city||data.locality,data.principalSubdivision].filter(Boolean).join(', ').slice(0,100)||'Ungefährer Gerätestandort'};
         if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');location={...location,...region};locationMemory={key,region,checked:Date.now()};
-      }catch{} // Weather still works; missing region is reported by the backend.
+      }catch{locationMemory={key,region:{},checked:Date.now(),regionUnavailable:true};} // Retry at most every five minutes; weather still uses coordinates.
     }
   }
   if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');
-  $('location-status').textContent=location.label+' · ungefährer Gerätestandort';return location;
+  $('location-status').textContent=location.label+' · ungefährer Gerätestandort'+(locationMemory?.key===key&&locationMemory.regionUnavailable?' · Region derzeit nicht ermittelbar; Ort bei Bedarf manuell wählen':'');return location;
 }
 $('choose-location').onclick=()=>{$('location-dialog').showModal();};
 $('location-current').onclick=async()=>{const revision=authRevision;$('use-device-location').checked=true;sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;try{await getDeviceLocation();if(revision!==authRevision)return;localStorage.setItem('butler-device-location-'+currentUser.id,'true');$('location-dialog').close();}catch(e){if(revision!==authRevision)return;$('use-device-location').checked=false;$('location-results').textContent='Standort nicht verfügbar: '+e.message;}};

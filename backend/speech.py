@@ -17,7 +17,7 @@ def transcribe_audio(audio:bytes,model_path:Path):
         path=str(model_path.resolve())
         model=_models.get(path)
         if model is None:
-            model=WhisperModel(path,device='cpu',compute_type='int8',cpu_threads=4,local_files_only=True)
+            model=WhisperModel(path,device='cpu',compute_type='int8',cpu_threads=1,local_files_only=True)
             _models[path]=model
         samples=decode_audio(io.BytesIO(audio),sampling_rate=16000)
         if len(samples)>16000*60:

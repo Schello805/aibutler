@@ -9,7 +9,7 @@ User=aibutler
 Group=aibutler
 WorkingDirectory=/opt/aibutler/current
 EnvironmentFile=/etc/aibutler/service.env
-ExecStart=/opt/aibutler/current/.venv/bin/uvicorn backend.main:app --host ${BIND_ADDRESS} --port ${BUTLER_PORT} --workers 1 --proxy-headers --forwarded-allow-ips=${TRUSTED_PROXY_IP} --no-access-log
+ExecStart=/opt/aibutler/current/.venv/bin/uvicorn backend.main:app --host ${BIND_ADDRESS} --port ${BUTLER_PORT} --workers 1 --proxy-headers --forwarded-allow-ips=${TRUSTED_PROXY_IP} --no-access-log --timeout-graceful-shutdown 15
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=90

@@ -1,7 +1,9 @@
 // Browser API contract tests for capture/cancellation; no microphone or private audio.
 const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');
-const source=fs.readFileSync('frontend/app.js','utf8').split('// Voice lifecycle:')[1].split('// End voice lifecycle.')[0];
-function harness({denied=false,pending=false}={}){
+const app=fs.readFileSync('frontend/app.js','utf8');
+const decoder=app.slice(app.indexOf('async function readApiResponse'),app.indexOf('// End response decoding.'));
+const source=app.split('// Voice lifecycle:')[1].split('// End voice lifecycle.')[0];
+function harness({denied=false,pending=false,proxyFailure=false}={}){
  const elements={mic:{},'voice-stop':{},'voice-send':{checked:true},question:{dispatchEvent(){}},'text-entry':{},'chat-form':{requestSubmit(){submitted++;}}};
  let submitted=0,stopped=0,uploads=0,requests=0,time=0,interval;
  const states=[],recordings=[];let resolveMedia;
@@ -21,8 +23,8 @@ function harness({denied=false,pending=false}={}){
  const context=vm.createContext({elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
   window:{isSecureContext:true,MediaRecorder:Recorder,AudioContext,speechSynthesis:{cancel(){}}},navigator:{mediaDevices:{getUserMedia(){requests++;return denied?Promise.reject(Object.assign(new Error('denied'),{name:'NotAllowedError'})):media;}}},
   $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{addEventListener(){}},
-  fetch:async()=>{uploads++;return{ok:true,json:async()=>({text:'Welche Lichter sind an?'})};}});
- vm.runInContext('//'+source+'\nglobalThis.probe={start:()=>elements.mic.onclick(),stop:stopVoice,active:()=>voiceConversation};',context);
+  fetch:async()=>{uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?'};}};}});
+ vm.runInContext(decoder+'\n//'+source+'\nglobalThis.probe={start:()=>elements.mic.onclick(),stop:stopVoice,active:()=>voiceConversation};',context);
  return{context,elements,states,recordings,flush:()=>new Promise(r=>setImmediate(r)),speak(){time+=150;interval();},resolve(){resolveMedia(stream);},stats:()=>({submitted,stopped,uploads,requests})};
 }
 test('Safari MP4 capture sends recognized text once and releases microphone',async()=>{
@@ -45,4 +47,8 @@ test('review mode opens secondary text field without automatically submitting',a
 
 test('rapid cancellation/restart cannot open two permission requests',async()=>{
  const h=harness({pending:true});h.context.probe.start();await h.flush();h.context.probe.start();h.context.probe.start();assert.equal(h.context.probe.active(),false);h.resolve();await h.flush();assert.equal(h.stats().requests,1);assert.equal(h.stats().uploads,0);
+});
+
+test('HTML proxy error is reported as service failure and releases microphone',async()=>{
+ const h=harness({proxyFailure:true});h.context.probe.start();await h.flush();h.speak();h.context.probe.start();await h.flush();assert.equal(h.stats().submitted,0);assert.equal(h.stats().stopped,1);assert.match(h.states.at(-1)[1],/Butler-Dienst.*HTTP 502/);assert.doesNotMatch(h.states.at(-1)[1],/Unexpected token/);
 });
