@@ -823,3 +823,20 @@ def test_initial_document_progress_persists_and_retries_errors(tmp_path,monkeypa
     settings.paperless_url='https://other.example'
     with TestClient(create_app(settings)) as client:
         assert client.get('/api/sync',headers={'Authorization':'Bearer test'}).json()['initial_import']['paperless']=={}
+
+
+def test_archive_logout_disconnect_does_not_discard_success(tmp_path,monkeypatch):
+    from backend import archive
+    calls=[]
+    class Mailbox:
+        def __init__(self,*args,**kwargs):pass
+        def login(self,*args):pass
+        def select(self,*args,**kwargs):return 'OK',[]
+        def response(self,*args):return 'UIDVALIDITY',[b'1']
+        def uid(self,*args):return 'OK',[b'']
+        def logout(self):raise archive.imaplib.IMAP4.abort('synthetic disconnect on logout')
+        def shutdown(self):calls.append('closed')
+    monkeypatch.setattr(archive.imaplib,'IMAP4_SSL',Mailbox)
+    s=Settings(_env_file=None,data_dir=tmp_path,imap_host='mail.example',imap_archive_all_folders=False)
+    result=archive.backfill_batch(s,Store(tmp_path))
+    assert result['complete'] and result['errors']==0 and calls==['closed']

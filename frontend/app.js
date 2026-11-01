@@ -111,7 +111,7 @@ function renderInitialImport(status,sync) {
   }
   for(const [id,name] of [['icloud_calendar','iCloud-Kalender'],['icloud_contacts','iCloud-Kontakte']]){const health=status.sources?.[id];if(configured[id]&&!health?.checked)rows.push({name,total:null,indexed:health?.fetched||0,error:health?.error,disabled:paused});}
   const semantic=status.sources?.semantic;
-  if(semantic?.enabled&&(semantic.remaining>0||semantic.error))rows.push({name:'Lokale Bedeutungssuche · Textabschnitte',total:semantic.total||null,indexed:semantic.indexed||0,error:!!semantic.error});
+  if(semantic?.enabled&&(semantic.remaining>0||semantic.error||semantic.index_error))rows.push({name:'Lokale Bedeutungssuche · Textabschnitte',total:semantic.total||null,indexed:semantic.indexed||0,error:!!(semantic.error||semantic.index_error)});
   const panel=$('initial-import'),list=$('initial-import-rows');panel.hidden=!rows.length;list.replaceChildren();
   for(const row of rows){
     const line=node('div','initial-import-row'),heading=node('div','initial-import-label');
@@ -154,6 +154,14 @@ async function api(path, options = {}) {
   return readApiResponse(response).catch(error=>{error.status=response.status;throw error;});
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
+// Source warning ownership: recovery must clear only its own old banner.
+let sourceNoticeText='';
+function sourceNotice(failures){
+  if(failures.length){const names={icloud_calendar:'iCloud-Kalender',icloud_contacts:'iCloud-Kontakte',imap:'E-Mail',mail_archive:'E-Mail-Archiv',paperless:'Paperless',semantic:'Lokale Suche'};sourceNoticeText=failures.slice(0,3).map(([key,value])=>(names[key]||key)+': '+(value.error||value.index_error||value.warning||'Einige Einträge konnten nicht abgerufen werden.')).join(' · ');notice(sourceNoticeText);}
+  else{if(sourceNoticeText&&$('notice').textContent===sourceNoticeText)notice('');sourceNoticeText='';}
+}
+// End source warning ownership.
+
 function renderContext(){
   const context=JSON.parse($('context-json').value);$('context-projects').replaceChildren();
   if(!context.projects.length)$('context-projects').append(node('div','empty-state','Noch keine Projekte hinterlegt. Was hast du als Nächstes vor?'));
@@ -251,8 +259,7 @@ async function refreshData() {
     const meta=document.createElement('div');meta.className='event-meta';const date=new Date(item.created.replace(' ','T')+'Z');
     meta.textContent=(item.item_id.startsWith('mail:')?'E-Mail':'Paperless')+' · '+(Number.isNaN(date.getTime())?item.created:date.toLocaleString('de-DE'));body.append(meta);el.append(summary,body);$('events').append(el);
   }
-  const failures = Object.entries(status.sources).filter(([,v]) => v.error || v.errors || v.warning);
-  if(failures.length){const names={icloud_calendar:'iCloud-Kalender',icloud_contacts:'iCloud-Kontakte',imap:'E-Mail',paperless:'Paperless',semantic:'Lokale Suche'};notice(failures.slice(0,3).map(([key,value])=>(names[key]||key)+': '+(value.error||value.warning||'Einige Einträge konnten nicht abgerufen werden.')).join(' · '));}
+  sourceNotice(Object.entries(status.sources).filter(([,v])=>v.error||v.index_error||v.errors||v.warning));
 }
 async function loadAccounts(){
   if(currentUser?.role!=='admin')return;

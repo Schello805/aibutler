@@ -123,3 +123,29 @@ def test_chat_search_reuses_semantic_candidates_across_lexical_variants(tmp_path
         await worker.search_context('Anderer Suchbegriff',source_filter=['imap','paperless'])
         assert len(calls)==2 and calls[-1][0]=='Eine andere Frage'
     asyncio.run(scenario())
+
+
+def test_failed_vector_collection_initialization_is_not_published(tmp_path,monkeypatch):
+    from qdrant_client import QdrantClient
+    monkeypatch.setattr('backend.semantic.model_info',lambda _:dict(key='retry-key'))
+    monkeypatch.setattr('backend.semantic.create_model',lambda _:object())
+    original=QdrantClient.create_collection;calls=[]
+    def create(self,*args,**kwargs):
+        calls.append(1)
+        if len(calls)==1:raise RuntimeError('synthetic initialization failure')
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(QdrantClient,'create_collection',create)
+    semantic=SemanticSearch(Settings(_env_file=None,data_dir=tmp_path),Store(tmp_path))
+    with pytest.raises(RuntimeError):semantic.ensure()
+    assert semantic.client is None
+    try:
+        assert semantic.ensure() and semantic.client is not None and len(calls)==2
+    finally:semantic.close()
+
+
+def test_background_failure_codes_do_not_expose_secrets():
+    import imaplib,sqlite3
+    from backend.worker import failure_code
+    assert failure_code(imaplib.IMAP4.abort('private mailbox password'))=='imap_disconnected'
+    assert failure_code(sqlite3.OperationalError('database is locked'))=='sqlite_busy'
+    assert failure_code(RuntimeError('Storage folder private is already accessed by another instance'))=='vector_storage_locked'

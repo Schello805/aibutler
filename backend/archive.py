@@ -1,5 +1,6 @@
 """Resumable read-only IMAP backfill. Batches are indexed locally, never sent to an LLM."""
 import email
+from contextlib import contextmanager
 import hashlib
 import imaplib
 import re
@@ -7,6 +8,20 @@ import time
 from email import policy
 from email.utils import parsedate_to_datetime,parseaddr
 from datetime import timezone
+
+
+@contextmanager
+def mailbox_connection(settings):
+    box=imaplib.IMAP4_SSL(settings.imap_host,settings.imap_port,timeout=20)
+    try:yield box
+    finally:
+        # A failed LOGOUT must not turn committed batches into failed imports.
+        try:
+            logout=getattr(box,'logout',None)
+            if logout:logout()
+        except (OSError,imaplib.IMAP4.error,EOFError):
+            try:box.shutdown()
+            except Exception:pass
 
 
 def folders(box,configured):
@@ -54,7 +69,8 @@ def backfill_batch(settings,store,batch_size=25):
     if not settings.imap_host:return {'configured':False}
     account=hashlib.sha256((settings.imap_host+'/'+settings.imap_user).encode()).hexdigest()[:16]
     results=[];remaining_budget=batch_size
-    with imaplib.IMAP4_SSL(settings.imap_host,settings.imap_port,timeout=30) as box:
+    known=store.mail_ids()
+    with mailbox_connection(settings) as box:
         box.login(settings.imap_user,settings.imap_password)
         names=folders(box,settings.imap_folder) if settings.imap_archive_all_folders else [settings.imap_folder]
         rotation=int(store.sync_state('mail-archive-cursor:'+account).get('index',0))%max(1,len(names))
@@ -73,7 +89,6 @@ def backfill_batch(settings,store,batch_size=25):
                 status,data=box.uid('search',None,'ALL')
                 if status!='OK':raise RuntimeError('UID search failed')
                 uids=data[0].split()
-                known=store.mail_ids()
                 missing=[uid for uid in reversed(uids) if prefix+uid.decode() not in known]
                 # The normal worker owns recent arrivals and their proactive relevance checks.
                 # Backfill must not race ahead and silently consume those notifications.
@@ -92,6 +107,7 @@ def backfill_batch(settings,store,batch_size=25):
                         raw=next(p[1] for p in parts if isinstance(p,tuple))
                         item=mail_item(raw,prefix+uid.decode())
                         store.commit_item(item)  # no finding, notification or external inference
+                        known.add(item['id'])
                         progress['indexed']+=1;progress['remaining']-=1
                     except Exception:progress['errors']+=1
                 progress['complete']=progress['remaining']==0 and progress['errors']==0
@@ -102,4 +118,4 @@ def backfill_batch(settings,store,batch_size=25):
             results.append(progress)
             # Other folders still get their inventory counted even when the fetch budget is spent.
     store.save_sync_state('mail-archive-cursor:'+account,{'index':rotation+max(1,batch_size//5)})
-    return {'configured':True,'folders':results,'complete':all(r.get('complete') for r in results),'indexed':sum(r['indexed'] for r in results),'total':sum(r['total'] for r in results)}
+    return {'configured':True,'folders':results,'complete':all(r.get('complete') for r in results),'errors':sum(r.get('errors',0)+bool(r.get('error')) for r in results),'indexed':sum(r['indexed'] for r in results),'total':sum(r['total'] for r in results)}

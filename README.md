@@ -565,3 +565,11 @@ Fehlen Klassen-/Datumszeilen im Suchauszug, liest der Butler das ausgewählte Do
 `aibutler update` installiert Tesseract mit deutschen/englischen Sprachdaten sowie die Python-Bibliotheken für lokale PDF-/Bildverarbeitung. In einer manuellen Entwicklungsinstallation zusätzlich Tesseract installieren und die aktualisierte `requirements.txt` einspielen. Die gezielte OCR verarbeitet maximal die ersten zwei PDF-Seiten, Dateien bis 20 MB und Bilder bis 16 Megapixeln; gedrehte Bilder werden innerhalb eines begrenzten Zeitbudgets versucht. Ein unlesbarer Scan kann trotzdem eine bessere Aufnahme benötigen.
 
 OCR-Ergebnisse werden lokal in SQLite zwischengespeichert; bei geänderten Paperless-Metadaten werden sie neu erzeugt. Temporäre Bilder werden nach der Verarbeitung entfernt. Es gibt keine Rückschreibung oder Änderung des Originals in Paperless. Feldbeschreibung des Kartenführerscheins: https://www.gesetze-im-internet.de/fev_2010/anlage_8.html
+
+### Wiederkehrende Archiv-/Indexierungswarnungen
+
+IMAP-Verbindungsfehler beim abschließenden LOGOUT machen bereits gespeicherte Archivbatches nicht mehr nachträglich ungültig. Der vorhandene Nachrichtenbestand wird pro Batch nur einmal gelesen. Fehlgeschlagene Archiv- und Vektorindexierungsdurchläufe werden mit ansteigendem Abstand wiederholt (30, 60, 120 Sekunden, maximal 5 Minuten). Erfolgreiche Durchläufe setzen die Wartefolge zurück.
+
+Die Oberfläche unterscheidet eine pausierte semantische **Indexierung** von einem Ausfall der **Suche**; bestehende Volltextdaten bleiben nutzbar. Ein teilweise initialisierter Vektorspeicher wird nicht als fertig veröffentlicht. Wiederholungsversuche verwenden einen sauberen Client, ohne bestehende Vektordaten pauschal zu löschen. Erledigte Quellenwarnungen verschwinden automatisch; andere Statusmeldungen bleiben erhalten.
+
+Bei erneutem Fehler zeigen Status und Dienstlogs einen sicheren Fehlercode, etwa `imap_disconnected`, `imap_protocol_or_login`, `sqlite_busy` oder `vector_storage_locked`. Diese Codes enthalten keine Mailinhalte, Passwörter, URLs oder Ordnernamen. Für die Ursachenprüfung auf dem LXC: `journalctl -u aibutler -n 40 --no-pager`. Die pauschale Warnung allein belegt keinen Datenverlust und reicht nicht, um die konkrete Ursache zu bestimmen.

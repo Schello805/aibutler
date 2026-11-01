@@ -54,7 +54,7 @@ class SemanticSearch:
         self.settings,self.store=settings,store
         self.root=settings.data_dir/'models/semantic'
         self.model=None;self.client=None;self.key=None;self.collection=None
-        self.lock=threading.RLock();self.query_cache=OrderedDict()
+        self.lock=threading.RLock();self.query_cache=OrderedDict();self.reset_pending=False
         self.state={'enabled':settings.semantic_enabled,'ready':False,'indexed':0,'total':0,'remaining':0}
 
     def ensure(self):
@@ -65,13 +65,21 @@ class SemanticSearch:
             return False
         if self.client is None:
             from qdrant_client import QdrantClient,models
-            self.key=info['key'];self.collection='butler_'+self.key[:24]
-            self.model=create_model(self.root)
-            self.client=QdrantClient(path=str(self.settings.data_dir/'semantic-vectors'))
-            if not self.client.collection_exists(self.collection):
-                self.client.create_collection(self.collection,vectors_config=models.VectorParams(size=DIMENSION,distance=models.Distance.COSINE))
-                # A restored backup deliberately has no derived vector files.
-                self.store.forget_semantic(self.key)
+            key=info['key'];collection='butler_'+key[:24]
+            if self.model is None:self.model=create_model(self.root)
+            model=self.model
+            client=QdrantClient(path=str(self.settings.data_dir/'semantic-vectors'))
+            try:
+                if not client.collection_exists(collection):
+                    self.reset_pending=True
+                    client.create_collection(collection,vectors_config=models.VectorParams(size=DIMENSION,distance=models.Distance.COSINE))
+                if self.reset_pending:
+                    self.store.forget_semantic(key);self.reset_pending=False
+            except Exception:
+                client.close()
+                raise
+            # Publish only a completely initialized client; failed startup can retry cleanly.
+            self.key,self.collection,self.model,self.client=key,collection,model,client
         self.state.update(ready=True,model=MODEL);self.state.pop('error',None)
         return True
 
@@ -104,6 +112,7 @@ class SemanticSearch:
                 self.client.upsert(self.collection,points=points,wait=True)
                 self.store.semantic_indexed(self.key,rows)
             self.state.update(self.store.semantic_counts(self.key),enabled=True,ready=True)
+            self.state.pop('index_error',None);self.state.pop('index_error_code',None)
             return len(rows)
 
     def search(self,query,sources=None,limit=12):

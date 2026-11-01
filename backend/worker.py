@@ -16,6 +16,17 @@ from .semantic import SemanticSearch,fuse_results
 
 log = logging.getLogger(__name__)
 
+def failure_code(exc):
+    # Categorize without logging message bodies, credentials, URLs or folder names.
+    import sqlite3,imaplib
+    if isinstance(exc,sqlite3.OperationalError):
+        return 'sqlite_busy' if 'lock' in str(exc).lower() or 'busy' in str(exc).lower() else 'sqlite_error'
+    if isinstance(exc,imaplib.IMAP4.abort):return 'imap_disconnected'
+    if isinstance(exc,imaplib.IMAP4.error):return 'imap_protocol_or_login'
+    if isinstance(exc,(TimeoutError,ConnectionError,OSError,EOFError)):return 'connection_or_io'
+    if 'already accessed' in str(exc).lower() or 'already locked' in str(exc).lower():return 'vector_storage_locked'
+    return type(exc).__name__
+
 class Worker:
     def __init__(self, settings, store):
         self.s, self.store = settings, store
@@ -127,15 +138,21 @@ class Worker:
                 self.status['sources']['ntfy_history']={'error':'ntfy-Verlauf nicht abrufbar. Topic-Adressen und Leseberechtigung prüfen.'}
 
     async def archive_loop(self):
+        failures=0
         while True:
             delay=30
             if self.s.imap_archive_enabled and self.s.imap_host:
                 try:
                     result=await asyncio.to_thread(backfill_batch,self.s.model_copy(),self.store)
                     self.status['sources']['mail_archive']=result
-                    delay=self.s.poll_seconds if result.get('complete') else 5
-                except Exception:
-                    self.status['sources']['mail_archive']={'error':'Historischer Mail-Abruf unterbrochen; bisheriger Fortschritt bleibt erhalten.'}
+                    if result.get('errors'):
+                        failures+=1;delay=min(300,30*2**min(failures-1,4));result['retry_seconds']=delay
+                    else:
+                        failures=0;delay=self.s.poll_seconds if result.get('complete') else 5
+                except Exception as exc:
+                    failures+=1;delay=min(300,30*2**min(failures-1,4));code=failure_code(exc)
+                    self.status['sources']['mail_archive']={**self.status['sources'].get('mail_archive',{}),'error':'Historischer Mail-Abruf pausiert ('+code+'); erneuter Versuch automatisch.','error_code':code,'retry_seconds':delay}
+                    log.warning('Mail archive deferred: %s (%s)',code,type(exc).__name__)
             await asyncio.sleep(delay)
 
     async def process(self, item, notify=True):
@@ -176,13 +193,16 @@ class Worker:
             await asyncio.sleep(0.2 if worked else 5)
 
     async def semantic_loop(self):
+        failures=0
         while True:
             try:
                 count=await asyncio.to_thread(self.semantic.index_batch)
+                failures=0
                 delay=0.2 if count else 5
-            except Exception:
-                self.semantic.state['error']='Lokale Vektorsuche vorübergehend nicht verfügbar; Volltextsuche bleibt aktiv.'
-                delay=30
+            except Exception as exc:
+                failures+=1;delay=min(300,30*2**min(failures-1,4));code=failure_code(exc)
+                self.semantic.state.update(index_error='Semantische Indexierung pausiert ('+code+'); Volltextsuche bleibt aktiv.',index_error_code=code,retry_seconds=delay)
+                log.warning('Semantic indexing deferred: %s (%s)',code,type(exc).__name__)
             await asyncio.sleep(delay)
 
     async def search_context(self,query,strict=True,source_filter=None,recent=False):
