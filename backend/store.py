@@ -1,6 +1,7 @@
 """Local chunk retrieval using SQLite FTS5; no embedding downloads or cloud index."""
 import json
 import os
+import hashlib
 import re
 import sqlite3
 import uuid
@@ -22,6 +23,9 @@ class Store:
             CREATE INDEX IF NOT EXISTS conversation_order ON conversation_messages(conversation_id,id);
             CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
             CREATE INDEX IF NOT EXISTS smart_history_latest ON smart_history(scope,state_id,id DESC);
+            CREATE TABLE IF NOT EXISTS chunk_fingerprints(chunk_id INTEGER PRIMARY KEY,item_id TEXT,digest TEXT);
+            CREATE TABLE IF NOT EXISTS semantic_state(model TEXT,chunk_id INTEGER,item_id TEXT,digest TEXT,PRIMARY KEY(model,chunk_id));
+            CREATE TABLE IF NOT EXISTS analysis_queue(item_id TEXT PRIMARY KEY,version TEXT,attempts INTEGER DEFAULT 0,available REAL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS dav_snapshots(scope TEXT PRIMARY KEY,value TEXT,checked REAL);
             CREATE TABLE IF NOT EXISTS personal_identity(user_id TEXT PRIMARY KEY,contact_id TEXT);
             CREATE TABLE IF NOT EXISTS public_cache(key TEXT PRIMARY KEY,value TEXT,checked REAL);
@@ -36,6 +40,10 @@ class Store:
             INSERT OR IGNORE INTO context VALUES(1, '{"projects":[]}');
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, item_id TEXT, title TEXT, reason TEXT, sent INTEGER DEFAULT 0, created TEXT DEFAULT CURRENT_TIMESTAMP);
             ''')
+            if 'flags' not in {row['name'] for row in db.execute('PRAGMA table_info(analysis_queue)')}:
+                db.execute("ALTER TABLE analysis_queue ADD COLUMN flags TEXT DEFAULT '{}'")
+            if 'item_version' not in {row['name'] for row in db.execute('PRAGMA table_info(events)')}:
+                db.execute('ALTER TABLE events ADD COLUMN item_version TEXT')
             if 'owner_id' not in {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}:
                 db.execute('ALTER TABLE conversations ADD COLUMN owner_id TEXT')
             if db.execute("INSERT OR IGNORE INTO notification_state VALUES('quiet-policy-v1','1')").rowcount:
@@ -123,11 +131,75 @@ class Store:
         self.set_item_metadata(item)
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO items VALUES(?,?,?,?,?)', tuple(item[k] for k in ('id','version','title','body','source')))
+            db.execute('DELETE FROM chunk_fingerprints WHERE item_id=?',(item['id'],))
             db.execute('DELETE FROM chunks WHERE item_id=?', (item['id'],))
             for start in range(0, max(1, len(item['body'])), 1000):
-                db.execute('INSERT INTO chunks VALUES(?,?,?)', (item['id'], item['title'], item['body'][start:start+1200]))
+                body=item['body'][start:start+1200]
+                chunk=db.execute('INSERT INTO chunks VALUES(?,?,?)', (item['id'], item['title'],body))
+                digest=hashlib.sha256((item['title']+'\n'+body).encode()).hexdigest()
+                db.execute('INSERT OR REPLACE INTO chunk_fingerprints VALUES(?,?,?)',(chunk.lastrowid,item['id'],digest))
             if reason:
-                db.execute('INSERT INTO events(item_id,title,reason,sent) VALUES(?,?,?,?)', (item['id'],item['title'],reason,0 if notify else 2))
+                db.execute('INSERT INTO events(item_id,title,reason,sent,item_version) VALUES(?,?,?,?,?)', (item['id'],item['title'],reason,0 if notify else 2,item['version']))
+
+    def queue_analysis(self,item):
+        with self.connect() as db:
+            db.execute('INSERT INTO analysis_queue(item_id,version,flags) VALUES(?,?,?) ON CONFLICT(item_id) DO UPDATE SET version=excluded.version,flags=excluded.flags,attempts=0,available=0',(item['id'],item['version'],json.dumps({key:bool(item.get(key)) for key in ('spam','advertising')})))
+
+    def next_analysis(self):
+        import time
+        with self.connect() as db:
+            db.execute('DELETE FROM analysis_queue WHERE NOT EXISTS (SELECT 1 FROM items i WHERE i.id=analysis_queue.item_id AND i.version=analysis_queue.version)')
+            row=db.execute('SELECT i.*,q.attempts,q.flags FROM analysis_queue q JOIN items i ON i.id=q.item_id AND i.version=q.version WHERE q.available<=? ORDER BY q.available,q.rowid LIMIT 1',(time.time(),)).fetchone()
+            if not row:return None
+            result=dict(row);result.update(json.loads(result.pop('flags') or '{}'));return result
+
+    def finish_analysis(self,item,reason=None):
+        with self.connect() as db:
+            if reason and db.execute('SELECT 1 FROM items WHERE id=? AND version=?',(item['id'],item['version'])).fetchone():
+                db.execute('UPDATE events SET reason=? WHERE item_id=? AND item_version=?',(reason,item['id'],item['version']))
+            db.execute('DELETE FROM analysis_queue WHERE item_id=? AND version=?',(item['id'],item['version']))
+
+    def retry_analysis(self,item):
+        import time
+        delay=min(3600,300*2**min(item['attempts'],4))
+        with self.connect() as db:db.execute('UPDATE analysis_queue SET attempts=attempts+1,available=? WHERE item_id=? AND version=?',(time.time()+delay,item['id'],item['version']))
+
+    def prepare_semantic_metadata(self,limit=128):
+        with self.connect() as db:
+            rows=list(db.execute('SELECT c.rowid,c.item_id,c.title,c.body FROM chunks c LEFT JOIN chunk_fingerprints f ON f.chunk_id=c.rowid AND f.item_id=c.item_id WHERE f.chunk_id IS NULL LIMIT ?',(limit,)))
+            for row in rows:db.execute('INSERT OR REPLACE INTO chunk_fingerprints VALUES(?,?,?)',(row['rowid'],row['item_id'],hashlib.sha256((row['title']+'\n'+row['body']).encode()).hexdigest()))
+
+    def pending_semantic(self,model,limit=8):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT c.rowid AS chunk_id,c.item_id,c.title,c.body,i.source,f.digest FROM chunks c JOIN items i ON i.id=c.item_id JOIN chunk_fingerprints f ON f.chunk_id=c.rowid AND f.item_id=c.item_id LEFT JOIN semantic_state s ON s.model=? AND s.chunk_id=c.rowid AND s.item_id=c.item_id AND s.digest=f.digest WHERE s.chunk_id IS NULL ORDER BY c.rowid LIMIT ?',(model,limit))]
+
+    def semantic_indexed(self,model,rows):
+        with self.connect() as db:
+            for row in rows:db.execute('INSERT OR REPLACE INTO semantic_state VALUES(?,?,?,?)',(model,row['chunk_id'],row['item_id'],row['digest']))
+
+    def obsolete_semantic(self,model):
+        with self.connect() as db:
+            return [row[0] for row in db.execute('SELECT s.chunk_id FROM semantic_state s WHERE s.model=? AND NOT EXISTS (SELECT 1 FROM chunk_fingerprints f WHERE f.chunk_id=s.chunk_id AND f.item_id=s.item_id AND f.digest=s.digest) LIMIT 256',(model,))]
+
+    def forget_semantic(self,model,ids=None):
+        with self.connect() as db:
+            if ids is None:db.execute('DELETE FROM semantic_state WHERE model=?',(model,))
+            else:db.executemany('DELETE FROM semantic_state WHERE model=? AND chunk_id=?',[(model,value) for value in ids])
+
+    def semantic_counts(self,model):
+        with self.connect() as db:
+            total=db.execute('SELECT count(*) FROM chunks').fetchone()[0]
+            indexed=db.execute('SELECT count(*) FROM semantic_state s JOIN chunk_fingerprints f ON f.chunk_id=s.chunk_id AND f.item_id=s.item_id AND f.digest=s.digest JOIN chunks c ON c.rowid=f.chunk_id AND c.item_id=f.item_id WHERE s.model=?',(model,)).fetchone()[0]
+            return {'total':total,'indexed':indexed,'remaining':max(0,total-indexed)}
+
+    def semantic_evidence(self,payload,query):
+        with self.connect() as db:
+            row=db.execute('SELECT c.item_id,c.title,c.body AS matched,i.body,i.source FROM chunks c JOIN items i ON i.id=c.item_id JOIN chunk_fingerprints f ON f.chunk_id=c.rowid AND f.item_id=c.item_id WHERE c.rowid=? AND c.item_id=? AND f.digest=?',(payload.get('chunk_id'),payload.get('item_id'),payload.get('digest'))).fetchone()
+            if not row or not relevant_evidence(query,row['title'],row['body']):return None
+            hit=dict(row);hit['body']=evidence_excerpt(hit['body'],query,hit.pop('matched'))
+            meta=db.execute('SELECT document_date,filename FROM item_metadata WHERE item_id=?',(hit['item_id'],)).fetchone()
+            if meta:hit.update(dict(meta))
+            return hit
 
     def mail_metadata_ids(self):
         with self.connect() as db:

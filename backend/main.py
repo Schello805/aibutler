@@ -63,6 +63,7 @@ def create_app(settings=None):
                 running.cancel()
                 with suppress(asyncio.CancelledError):
                     await running
+        await asyncio.to_thread(worker.semantic.close)
     app = FastAPI(title='Lokaler KI-Butler', lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     @app.exception_handler(RequestValidationError)
     async def private_validation_error(request,exception):
@@ -208,7 +209,7 @@ def create_app(settings=None):
 
     @app.get('/api/status',dependencies=protected)
     async def status():
-        return {**worker.status,'sources':{**worker.status['sources'],**worker.personal.status},'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled,'icloud_calendar':s.icloud_calendar_enabled,'icloud_contacts':s.icloud_contacts_enabled}}
+        return {**worker.status,'sources':{**worker.status['sources'],**worker.personal.status,'semantic':dict(worker.semantic.state)},'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled,'icloud_calendar':s.icloud_calendar_enabled,'icloud_contacts':s.icloud_contacts_enabled}}
     @app.get('/api/sync',dependencies=protected)
     async def sync_status():
         import hashlib
@@ -377,21 +378,21 @@ def create_app(settings=None):
                 hits=[];seen=set()
                 for query in plan.queries or [value.message]:
                     allowed=[{'email':'imap','paperless':'paperless','ntfy':'ntfy'}.get(source,source) for source in selected if source!='smart_home']
-                    candidates=store.search(query,source_filter=allowed,recent=plan.recent)
-                    if not candidates:candidates=store.search(query,strict=False,source_filter=allowed,recent=plan.recent)
+                    candidates=await worker.search_context(query,source_filter=allowed,recent=plan.recent)
+                    if not candidates:candidates=await worker.search_context(query,strict=False,source_filter=allowed,recent=plan.recent)
                     for hit in candidates:
                         if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.append(hit)
                 if plan.recent:hits.sort(key=evidence_recency,reverse=True)
                 # Preserve candidates until relevance filtering and source balancing below.
         else:
-            hits = store.sender_messages(sender) if sender else store.recent_purchases() if is_purchase_question(value.message) else store.recent_account_activity() if is_account_question(value.message) else store.search(value.message)
+            hits = store.sender_messages(sender) if sender else store.recent_purchases() if is_purchase_question(value.message) else store.recent_account_activity() if is_account_question(value.message) else await worker.search_context(value.message)
         # Intent-specific helpers provide candidates; additional planned sources remain searchable.
         if plan:
             seen={hit['item_id'] for hit in hits}
             extra_allowed=[{'email':'imap','paperless':'paperless','ntfy':'ntfy'}.get(source,source) for source in selected if source!='smart_home']
             if plan.intent=='person':extra_allowed=[source for source in extra_allowed if source!='imap']
             for query in plan.queries:
-                for hit in store.search(query,strict=False,source_filter=extra_allowed,recent=plan.recent):
+                for hit in await worker.search_context(query,strict=False,source_filter=extra_allowed,recent=plan.recent):
                     if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.append(hit)
             for hit in activity_hits:
                 if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.insert(0,hit)

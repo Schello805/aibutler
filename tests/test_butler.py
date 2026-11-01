@@ -478,6 +478,8 @@ def test_ai_failure_does_not_prevent_local_mail_indexing(tmp_path,monkeypatch):
     value=item();value.update(sender_name='Anna',sender_address='anna@example.org',sent_at='2026-10-28T10:00:00+00:00')
     asyncio.run(w.process(value))
     assert store.unchanged(value) and store.sender_messages('Anna')
+    assert store.next_analysis() is not None
+    asyncio.run(w.analysis_one())
     assert w.status['analysis_fallbacks']==1
 
 def test_latest_purchase_uses_order_confirmations_not_ads_or_shipping(tmp_path):

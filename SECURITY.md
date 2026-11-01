@@ -44,3 +44,5 @@ Die neu hinzugekommenen Parser werden über `requirements.txt` installiert; dadu
 - [OWASP: Content Security Policy](https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html)
 - [OWASP: HTTP Security Headers](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html)
 - [Starlette: Middleware und TrustedHost](https://www.starlette.io/middleware/)
+
+Lokale semantische Suche: FastEmbed berechnet Embeddings mit lokal vorhandenen ONNX-Gewichten; Qdrant läuft eingebettet ohne eigenen Netzwerkdienst. Dokumenttexte werden zur Vektorberechnung nicht hochgeladen. Der Installer lädt ausschließlich öffentliche Modellgewichte; Inferenz verwendet `local_files_only`. Hugging-Face- und ONNX-Telemetrie sind deaktiviert. Vektoren bleiben sensible abgeleitete Daten und erfordern dieselben Zugriffsrechte wie die Quelldaten. Rekonstruierbare Vektordateien werden aus verwalteten Backups ausgeschlossen.

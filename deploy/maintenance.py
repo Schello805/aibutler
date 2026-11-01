@@ -30,8 +30,8 @@ def release_path(path):
 
 def archive_filter(member):
     parts = Path(member.name).parts
-    if len(parts) >= 2 and parts[1] in ('models', 'cache'):
-        return None  # Public model weights/cache are downloadable; not private state.
+    if len(parts) >= 2 and parts[1] in ('models', 'cache', 'semantic-vectors'):
+        return None  # Public weights/cache and derived vectors are rebuilt after restore.
     if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
         raise ValueError('Unerwarteter Link/Spezialdatei im privaten Datenverzeichnis')
     return member

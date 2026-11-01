@@ -9,3 +9,5 @@ icalendar>=6,<8
 recurring-ical-events>=3,<4
 vobject>=0.9.9,<1
 defusedxml>=0.7,<1
+fastembed>=0.9,<1
+qdrant-client>=1.16,<2

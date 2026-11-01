@@ -28,3 +28,9 @@ Wetter und Feiertage sind jetzt implementiert und jeweils in den Einstellungen a
 - Ausgefallene oder veraltete Daten ausdrücklich kennzeichnen.
 - Proaktive Meldungen nur für bewusst eingerichtete Regeln und relevante Änderungen; keine Push-Meldung zu jeder Frage.
 - Analyse privater Unterlagen und Verknüpfung mit öffentlichen API-Daten erfolgen im Butler. Die bestehende Freigabe für externe Chat-KI bleibt davon getrennt.
+
+## Lokale Suche und Hintergrundaufträge
+
+Umgesetzt: unabhängige Quellenaufträge mit konfigurierbaren Intervallen, sofortige Volltextindexierung, dauerhafte optionale KI-Analysewarteschlange sowie lokale mehrsprachige FastEmbed-/Qdrant-Suche mit fortsetzbarem Aufbau.
+
+Nächster separater Schritt: zeitabhängiges Gedächtnis (Graphiti prüfen), das Aussagen mit Quelle, Gültigkeitszeitraum und Widersprüchen verwaltet. Vor der Integration sind zusätzliche Datenbank-/Modellanforderungen, Löschbarkeit und Kosten zu bewerten. Die aktuelle Bedeutungssuche ersetzt dieses Gedächtnis nicht.

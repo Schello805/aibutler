@@ -90,12 +90,13 @@ def test_backup_restore_recovers_database_credentials_and_code_without_losing_ne
         db.execute('CREATE TABLE messages(text TEXT)');db.execute('INSERT INTO messages VALUES(?)',('old private conversation',))
     (data/'models').mkdir();(data/'models/model.bin').write_bytes(b'redownloadable model')
     (data/'cache').mkdir();(data/'cache/download').write_bytes(b'public cache')
+    (data/'semantic-vectors').mkdir();(data/'semantic-vectors/vector').write_bytes(b'derived private vectors')
     target=maintenance.backup()
     assert target.stat().st_mode & 0o777 == 0o700
     with tarfile.open(target/'data.tar.gz') as archive:
         names=archive.getnames()
         assert 'data/config/.env' in names and 'data/butler.sqlite3' in names
-        assert not any(name.startswith(('data/models','data/cache')) for name in names)
+        assert not any(name.startswith(('data/models','data/cache','data/semantic-vectors')) for name in names)
     new=root/'releases/new';(new/'backend').mkdir(parents=True);(new/'backend/main.py').touch()
     (root/'current').unlink();(root/'current').symlink_to(new)
     (data/'config/.env').write_text('API_TOKEN=newer-private-key\n')

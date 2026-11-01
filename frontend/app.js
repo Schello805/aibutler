@@ -91,6 +91,8 @@ function renderInitialImport(status,sync) {
     if(!complete)rows.push({name:'Benachrichtigungen',total:null,indexed:sync.indexed.ntfy||0,disabled:paused||initial.ntfy_enabled===false,error:topics.some(s=>s.error)||status.sources?.ntfy_history?.error});
   }
   for(const [id,name] of [['icloud_calendar','iCloud-Kalender'],['icloud_contacts','iCloud-Kontakte']]){const health=status.sources?.[id];if(configured[id]&&!health?.checked)rows.push({name,total:null,indexed:health?.fetched||0,error:health?.error,disabled:paused});}
+  const semantic=status.sources?.semantic;
+  if(semantic?.enabled&&(semantic.remaining>0||semantic.error))rows.push({name:'Lokale Bedeutungssuche · Textabschnitte',total:semantic.total||null,indexed:semantic.indexed||0,error:!!semantic.error});
   const panel=$('initial-import'),list=$('initial-import-rows');panel.hidden=!rows.length;list.replaceChildren();
   for(const row of rows){
     const line=node('div','initial-import-row'),heading=node('div','initial-import-label');

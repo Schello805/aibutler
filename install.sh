@@ -16,6 +16,7 @@ PORT=8010
 DOMAIN=''
 PROXY_IP=''
 SPEECH=true
+SEMANTIC=true
 CHECK=false
 REFRESH_DEPS=false
 INSTALL_TEMP=''
@@ -37,6 +38,8 @@ AI Butler – Installation und Update (Debian 12+/Ubuntu 24.04+, systemd)
   --domain HOST       Eigene HTTPS-Adresse, z. B. ai.example.com
   --proxy-ip IP       Konkrete IP des HTTPS-Reverse-Proxys (kein *)
   --local-only        Nur Loopback; bestehende Domain/Proxy-IP entfernen
+  --no-semantic       Ohne lokales semantisches Suchmodell (Volltext bleibt aktiv)
+  --semantic          Lokale semantische Suche aktivieren (Standard)
   --no-speech         Ohne lokales Sprachmodell und Sprach-Abhängigkeiten
   --speech            Lokale Sprache aktivieren (Standard der Erstinstallation)
   --refresh-deps      Python-Pakete frisch auflösen (sonst Wiederverwendung bis 7 Tage)
@@ -64,15 +67,15 @@ if [[ -f $MANIFEST ]] && ! $CHECK; then
     config_values=$(python3 - "$MANIFEST" <<'PY'
 import json,sys
 c=json.load(open(sys.argv[1]))
-for key,default in [('ref','main'),('port',8010),('domain',''),('proxy_ip',''),('speech',True)]:
+for key,default in [('ref','main'),('port',8010),('domain',''),('proxy_ip',''),('speech',True),('semantic',True)]:
     value=c.get(key,default)
     if isinstance(value,bool):value=str(value).lower()
     if '\n' in str(value) or '\r' in str(value):raise ValueError('Invalid install configuration')
     print(value)
 PY
     )
-    # Five known fields, including possibly empty domain/proxy values.
-    { IFS= read -r REF; IFS= read -r PORT; IFS= read -r DOMAIN; IFS= read -r PROXY_IP; IFS= read -r SPEECH; } <<< "$config_values"
+    # Six known fields, including possibly empty domain/proxy values.
+    { IFS= read -r REF; IFS= read -r PORT; IFS= read -r DOMAIN; IFS= read -r PROXY_IP; IFS= read -r SPEECH; IFS= read -r SEMANTIC; } <<< "$config_values"
 fi
 PREVIOUS_PORT=$PORT
 while [[ $# -gt 0 ]]; do
@@ -84,6 +87,8 @@ while [[ $# -gt 0 ]]; do
         --proxy-ip) need_value "$@"; PROXY_IP=$2; shift 2 ;;
         --port) need_value "$@"; PORT=$2; shift 2 ;;
         --ref) need_value "$@"; REF=$2; shift 2 ;;
+        --no-semantic) SEMANTIC=false; shift ;;
+        --semantic) SEMANTIC=true; shift ;;
         --no-speech) SPEECH=false; shift ;;
         --speech) SPEECH=true; shift ;;
         --refresh-deps) REFRESH_DEPS=true; shift ;;
@@ -128,7 +133,7 @@ PY
 BIND=127.0.0.1
 [[ -z $DOMAIN ]] || BIND=0.0.0.0
 if $CHECK; then
-    printf 'Konfiguration gültig: ref=%s port=%s bind=%s domain=%s proxy=%s speech=%s\n' "$REF" "$PORT" "$BIND" "${DOMAIN:-keine}" "${PROXY_IP:-keiner}" "$SPEECH"
+    printf 'Konfiguration gültig: ref=%s port=%s bind=%s domain=%s proxy=%s speech=%s semantic=%s\n' "$REF" "$PORT" "$BIND" "${DOMAIN:-keine}" "${PROXY_IP:-keiner}" "$SPEECH" "$SEMANTIC"
     exit 0
 fi
 [[ $(uname -s) == Linux ]] || die 'Dieses Skript ist für Linux-LXC/VM, nicht für macOS. Lokale Entwicklung: README.'
@@ -249,6 +254,10 @@ if $SPEECH && [[ ! -f $APP_DATA/models/whisper-base/model.bin ]]; then
     log 'Öffentliche Sprachmodell-Gewichte laden (Audio wird nicht hochgeladen) …'
     runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_speech.py"
 fi
+if $SEMANTIC; then
+    log 'Lokales Suchmodell vorbereiten (einmalig ca. 220 MB; keine privaten Inhalte werden übertragen) …'
+    runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_semantic.py"
+fi
 if [[ -L $APP_ROOT/current && -f $MANIFEST && -f $APP_CONFIG/service.env && -f /etc/systemd/system/aibutler.service ]]; then OLD_RELEASE=$(readlink -f "$APP_ROOT/current"); fi
 if [[ -n $OLD_RELEASE ]]; then
     log 'Dienst kurz anhalten und konsistentes Backup erstellen …'
@@ -261,17 +270,18 @@ CHANGED=true
 # Atomically replace the release symlink; settings/data live outside the checkout.
 ln -sfn "$RELEASE" "$APP_ROOT/.current-next"
 mv -Tf "$APP_ROOT/.current-next" "$APP_ROOT/current"
-python3 - "$MANIFEST" "$REF" "$PORT" "$DOMAIN" "$PROXY_IP" "$SPEECH" "$SHA" <<'PY'
+python3 - "$MANIFEST" "$REF" "$PORT" "$DOMAIN" "$PROXY_IP" "$SPEECH" "$SHA" "$SEMANTIC" <<'PY'
 import json,sys
 from pathlib import Path
-path,ref,port,domain,proxy,speech,sha=sys.argv[1:]
-Path(path).write_text(json.dumps(dict(ref=ref,port=int(port),domain=domain,proxy_ip=proxy,speech=speech=='true',sha=sha),indent=2)+'\n')
+path,ref,port,domain,proxy,speech,sha,semantic=sys.argv[1:]
+Path(path).write_text(json.dumps(dict(ref=ref,port=int(port),domain=domain,proxy_ip=proxy,speech=speech=='true',semantic=semantic=='true',sha=sha),indent=2)+'\n')
 PY
 cat > "$APP_CONFIG/service.env" <<ENV
 BUTLER_ENV_FILE=$APP_DATA/config/.env
 DATA_DIR=$APP_DATA
 PUBLIC_ORIGIN=$DOMAIN
 SPEECH_ENABLED=$SPEECH
+SEMANTIC_ENABLED=$SEMANTIC
 BIND_ADDRESS=$BIND
 BUTLER_PORT=$PORT
 TRUSTED_PROXY_IP=${PROXY_IP:-127.0.0.1}

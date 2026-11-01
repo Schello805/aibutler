@@ -8,11 +8,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings, IoBrokerConfig,PublicConfig,ICloudConfig):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+    semantic_enabled:bool=True
     speech_enabled: bool = True
     public_origin: str = ''
     api_token: str = ''
     data_dir: Path = Path('data')
     poll_seconds: int = Field(default=300, ge=10)
+    imap_poll_seconds:int|None=Field(default=None,ge=10)
+    paperless_poll_seconds:int|None=Field(default=None,ge=10)
+    iobroker_poll_seconds:int|None=Field(default=None,ge=10)
+    ntfy_poll_seconds:int|None=Field(default=None,ge=10)
+    icloud_calendar_poll_seconds:int|None=Field(default=None,ge=30)
+    icloud_contacts_poll_seconds:int|None=Field(default=None,ge=60)
     worker_enabled: bool = True
     allow_external_llm: bool = False
     chat_llm_enabled: bool | None = None
