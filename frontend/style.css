@@ -2521,3 +2521,81 @@ body[data-view=chat] .chat-top {height:36px;min-height:36px;}
 .answer-timings{margin-top:8px;color:#788775;font-size:10px;line-height:1.8}.answer-timings>summary{cursor:pointer;width:fit-content;min-height:28px;display:list-item}.answer-timings .source-timing{padding-left:12px;color:#8a9786}.chat-progress{font-variant-numeric:tabular-nums}
 
 .benchmark-dialog{width:min(94vw,900px);max-height:85dvh;overflow:auto;border:1px solid #dce5d7;border-radius:16px;padding:24px;background:#fcfdfa;color:#354333}.benchmark-dialog::backdrop{background:#17251d66}.benchmark-form{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:20px 0}.benchmark-form label{display:grid;gap:8px;flex:1;min-width:160px}.benchmark-form select{width:100%;padding:10px;border:1px solid #dce5d7;border-radius:8px}.benchmark-results{font-size:12px;overflow-wrap:anywhere}.benchmark-results table{width:100%;border-collapse:collapse;margin-bottom:18px}.benchmark-results th,.benchmark-results td{text-align:left;padding:10px 6px;border-bottom:1px solid #e1e8dc}.benchmark-results details{margin:8px 0}.benchmark-results p{white-space:pre-wrap;line-height:1.6}
+
+/* Mobile conversation: quiet status, readable transcript, thumb-friendly voice dock. */
+.initial-import>summary {cursor:pointer;min-height:34px;list-style:none;}
+.initial-import>summary::-webkit-details-marker {display:none;}
+.import-detail-label {font-size:10px;font-weight:400;display:flex;align-items:center;gap:8px;}
+.import-detail-label::after {content:'⌄';font-size:16px;transition:transform .15s;}
+.initial-import[open] .import-detail-label::after {transform:rotate(180deg);}
+.import-source-link {display:inline-block;font-size:11px;margin:2px 0 10px;color:#667e63;}
+.initial-import:not([open]) {padding-top:4px;padding-bottom:4px;}
+.initial-import:not([open])>summary {margin-bottom:0;}
+.initial-import:focus-visible {outline:2px solid #648667;outline-offset:2px;}
+@media(max-width:700px){
+ body[data-view=chat] .app-header {padding:8px 16px;min-height:58px;height:58px;}
+ body[data-view=chat] .header-actions {gap:2px;}
+ body[data-view=chat] .app-revision {font-size:8px;}
+ body[data-view=chat] .app-revision small {display:none;}
+ body[data-view=chat] .initial-import {flex-shrink:0;margin:4px 14px 0;padding:5px 12px;border-radius:12px;max-height:24dvh;overflow-y:auto;}
+ body[data-view=chat] .initial-import-heading {font-size:11px;gap:8px;margin:0;}
+ body[data-view=chat] .initial-import[open] .initial-import-heading {margin-bottom:6px;}
+ body[data-view=chat] .initial-import-label {gap:10px;font-size:10px;}
+ body[data-view=chat] .initial-import-label>span:first-child {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+ body[data-view=chat] .initial-import-label>span:last-child {flex-shrink:0;}
+ body[data-view=chat] .notice {margin:8px 14px 0;padding:9px 12px;font-size:11px;line-height:1.5;border-radius:12px;max-height:84px;overflow-y:auto;}
+ body[data-view=chat] .chat-workspace #messages {padding:20px 20px 12px;scrollbar-gutter:auto;scroll-padding-bottom:16px;}
+ body[data-view=chat] .welcome {max-width:310px;margin:16px auto;}
+ body[data-view=chat] .welcome h1 {font-size:28px;line-height:1.2;letter-spacing:-1px;}
+ body[data-view=chat] .welcome>p {font-size:13px;line-height:1.65;max-width:260px;margin:12px auto 0;}
+ body[data-view=chat] .bubble {font-size:15px;line-height:1.75;margin-bottom:20px;}
+ body[data-view=chat] .bubble.user {max-width:94%;padding:12px 15px;}
+ body[data-view=chat] .message-role {font-size:9px;letter-spacing:.8px;margin-bottom:9px;}
+ body[data-view=chat] .message-meta {font-size:10px;line-height:1.8;}
+ body[data-view=chat] .evidence-link {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;max-width:100%;padding:8px 11px;margin:8px 6px 0 0;border-radius:10px;font-size:11px;white-space:normal;text-align:left;vertical-align:top;}
+ body[data-view=chat] #chat-form {width:calc(100% - 24px);margin:0 12px 8px;padding:12px 14px 5px;border:1px solid #e0e7dc;border-radius:22px;background:#fff;box-shadow:0 5px 22px #243d2a09;column-gap:12px;}
+ body[data-view=chat] .voice-control {grid-template-columns:72px minmax(0,1fr);gap:3px 12px;padding:0 0 5px;}
+ body[data-view=chat] .voice-control #mic {width:72px;height:72px;min-height:72px;grid-row:1/4;}
+ body[data-view=chat] .voice-control #mic .icon {width:32px;height:32px;}
+ body[data-view=chat] #voice-label {font-size:14px;line-height:1.35;align-self:end;}
+ body[data-view=chat] #voice-hint {font-size:11px;line-height:1.45;}
+ body[data-view=chat] #voice-stop {grid-column:2;grid-row:3;min-height:32px;max-width:none;width:fit-content;text-align:left;padding:2px 0;font-size:11px;}
+ body[data-view=chat] #text-entry>summary,body[data-view=chat] .voice-options>summary {display:flex;align-items:center;min-height:40px;font-size:11px;padding:6px 2px;}
+ body[data-view=chat] .voice-options>summary {justify-content:flex-end;}
+ body[data-view=chat] #text-entry[open],body[data-view=chat] .voice-options[open] {grid-column:1/-1;}
+ body[data-view=chat] .voice-options[open]>summary {justify-content:flex-start;}
+ body[data-view=chat] #text-entry .composer {margin:0 0 8px;padding:10px;border-radius:12px;}
+ body[data-view=chat] #text-entry textarea {max-height:20dvh;}
+ body[data-view=chat] .voice-options .chat-preferences {display:grid;gap:12px;font-size:12px;}
+ body[data-view=chat] .voice-options .chat-preferences label {min-height:34px;}
+ body[data-view=chat] .sidebar nav>a {min-height:52px;font-size:9px;gap:5px;}
+ body[data-view=chat] .sidebar nav>a .icon {width:20px;height:20px;}
+ body.keyboard-open[data-view=chat] #chat-form {margin-bottom:4px;padding-top:5px;}
+}
+@media(max-width:370px){
+ body[data-view=chat] .app-header {padding-inline:12px;}
+ body[data-view=chat] .app-revision {max-width:80px;overflow:hidden;text-overflow:ellipsis;}
+ body[data-view=chat] .chat-workspace #messages {padding-inline:16px;}
+ body[data-view=chat] #chat-form {padding-inline:12px;}
+ body[data-view=chat] .welcome h1 {font-size:25px;}
+}
+.initial-import>summary {flex-wrap:wrap;}
+#initial-import-overall {flex:0 0 100%;width:100%;height:2px;margin:0;}
+.initial-import[open] #initial-import-overall {display:none;}
+@media(max-width:700px){
+ body[data-view=chat] .chat-workspace:has(.welcome) {justify-content:center;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #messages {flex:0 0 auto;padding:16px 24px;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #chat-form {margin-top:12px;margin-bottom:24px;}
+ body[data-view=chat] .chat-workspace:has(.welcome) .voice-control {grid-template-columns:88px minmax(0,1fr);min-height:96px;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #mic {width:88px;height:88px;min-height:88px;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #mic .icon {width:36px;height:36px;}
+}
+@media(max-width:700px){
+ body[data-view=chat] #text-entry .composer {display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end;}
+ body[data-view=chat] #text-entry textarea {grid-column:1;grid-row:1;min-height:44px;padding:8px 0;}
+ body[data-view=chat] #text-entry .composer-bottom {grid-column:2;grid-row:1;margin:0;padding:0;}
+}
+@media(max-width:700px) and (max-height:650px){
+ body[data-view=chat] .chat-workspace:has(#text-entry[open]) .voice-control {display:none;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #chat-form {margin-top:0;margin-bottom:8px;}
+}

@@ -115,6 +115,7 @@ function renderInitialImport(status,sync) {
   const semantic=status.sources?.semantic;
   if(semantic?.enabled&&(semantic.remaining>0||semantic.error||semantic.index_error))rows.push({name:'Lokale Bedeutungssuche · Textabschnitte',total:semantic.total||null,indexed:semantic.indexed||0,error:!!(semantic.error||semantic.index_error)});
   const panel=$('initial-import'),list=$('initial-import-rows');panel.hidden=!rows.length;list.replaceChildren();
+  const overall=$('initial-import-overall');if(overall){const total=rows.reduce((n,row)=>n+(row.total||0),0);if(rows.length&&rows.every(row=>row.total!=null)&&total)overall.value=Math.min(100,rows.reduce((n,row)=>n+row.indexed,0)/total*100);else overall.removeAttribute('value');}
   for(const row of rows){
     const line=node('div','initial-import-row'),heading=node('div','initial-import-label');
     const count=row.total!=null?row.indexed.toLocaleString('de-DE')+' / '+row.total.toLocaleString('de-DE'):row.indexed?row.indexed.toLocaleString('de-DE')+' erfasst':'Bestand wird ermittelt';
