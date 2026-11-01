@@ -1,6 +1,7 @@
 import asyncio
 import os
 import ipaddress
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager, suppress
@@ -18,7 +19,7 @@ from .config import Settings
 from .store import Store
 from .accounts import Accounts
 from .worker import Worker
-from .icloud import self_profile_question
+from .icloud import self_profile_question,upcoming_calendar
 from .intelligence import generate, ProviderLimited, provider_is_limited
 from .public_data import PublicData,DeviceLocation,outdoor_question,needs_public_context,target_day
 from .planning import plan_question,complete_plan
@@ -381,6 +382,27 @@ def create_app(settings=None):
         if memory_reply:
             memory_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(memory_reply),owner_id,request_id=value.request_id)
             return memory_reply
+        # A simple upcoming-calendar question needs neither a remote planner nor mail/RAG.
+        if upcoming_calendar(value.message) and not re.search(r'e-?mail|dokument|rechnung|wetter|paket|warum|vergleich',value.message,re.I):
+            zone=value.device_location.timezone if value.device_location else 'Europe/Berlin'
+            context=await worker.personal.context(value.message,zone=zone,requested=('calendar',))
+            calendar=context.get('calendar')
+            if not s.icloud_calendar_enabled:
+                answer='Bitte aktiviere zuerst deinen iCloud-Kalender in den Einstellungen.'
+            elif not calendar:
+                answer='Dein iCloud-Kalender ist gerade nicht abrufbar. Bitte prüfe den Verbindungstest in den Einstellungen.'
+            else:
+                events=calendar['events'][:5]
+                lines=[]
+                for event in events:
+                    start=datetime.fromisoformat(event['start']).astimezone(ZoneInfo(zone))
+                    lines.append(start.strftime('%d.%m.%Y')+(' · ganztägig' if event['all_day'] else start.strftime(' · %H:%M Uhr'))+' – '+event['title'])
+                answer=('Deine nächsten Termine:\n'+'\n'.join(lines)) if lines else 'Im abgefragten Zeitraum sind in den eingebundenen Kalendern keine weiteren Termine eingetragen.'
+                if calendar['stale'] or calendar.get('incomplete'):
+                    answer=('Aus dem zuletzt verfügbaren Kalenderstand:\n'+'\n'.join(lines) if lines else 'Dein Kalender ist gerade nicht vollständig abrufbar.')+'\nDer Stand ist unvollständig oder veraltet; weitere Termine können fehlen.'
+            result={'answer':answer,'sources':context.get('sources',[]),'diagnostics':context.get('diagnostics',[]),'external_used':False,'answer_mode':'live' if calendar and not calendar['stale'] else 'local'}
+            result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
+            return result
         pending=last.get('pending_question') if last.get('clarification')=='location' else None
         if pending and value.device_location is None and len(value.message)<=80 and re.fullmatch(r"[\w\s,().'-]+",value.message) and not re.match(r'^(wer|was|wann|warum|wie|welche|wo|kann|ist|hat|gibt)\b',value.message,re.I):
             place=re.sub(r'^(?:in|für)\s+','',value.message,flags=re.I).strip()
@@ -646,7 +668,7 @@ def create_app(settings=None):
         raise HTTPException(501,'Messenger-Adapter noch nicht implementiert')
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     # Freeze the displayed revision and asset URLs to the same running release.
-    import hashlib,re,subprocess
+    import hashlib,subprocess
     ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js'))).hexdigest()[:10]
     root=frontend.parent.resolve()
     release_match=re.fullmatch(r'\d{8}T\d{6}Z-([a-f0-9]{12})',root.name)

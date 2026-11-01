@@ -359,3 +359,33 @@ def test_calendar_refresh_keeps_180_days_both_directions_even_after_day_query(tm
     assert calls[0]==(today-timedelta(days=180),today+timedelta(days=181))
     asyncio.run(personal.refresh('calendar',today+timedelta(days=400),today+timedelta(days=401),force=True))
     assert calls[-1][1]==today+timedelta(days=401)
+
+
+def test_upcoming_events_exclude_past_and_sort_chronologically(tmp_path,monkeypatch):
+    personal=PersonalSources(settings(tmp_path),Store(tmp_path))
+    now=datetime.now(ZONE)
+    def event(days,title):
+        start=now+timedelta(days=days)
+        return {'id':title,'title':title,'start':start.isoformat(),'end':(start+timedelta(hours=1)).isoformat(),'all_day':False,'calendar':'Familie'}
+    async def refresh(kind,*args,**kwargs):
+        return {'records':[event(5,'Später'),event(-1,'Vorbei'),event(1,'Zuerst')],'checked':0,'stale':False,'collections':['Familie']}
+    monkeypatch.setattr(personal,'refresh',refresh)
+    result=asyncio.run(personal.context('Was sind meine nächsten Termine?'))
+    assert [row['title'] for row in result['calendar']['events']]==['Zuerst','Später']
+
+
+def test_next_appointments_skip_llm_planner_and_other_sources(tmp_path,monkeypatch):
+    from backend import main
+    app=create_app(settings(tmp_path))
+    monkeypatch.setattr(app.state.accounts,'session',lambda token:{'id':'test','email':'test@example.invalid','role':'member'})
+    async def forbidden(*args,**kwargs):raise AssertionError('No general planner for simple calendar list')
+    monkeypatch.setattr(main,'plan_question',forbidden)
+    async def context(*args,**kwargs):
+        return {'calendar':{'events':[{'title':'Testtermin','start':'2026-11-03T10:00:00+01:00','all_day':False}],'stale':False},'sources':[],'diagnostics':[]}
+    monkeypatch.setattr(app.state.worker.personal,'context',context)
+    with TestClient(app,base_url='https://testserver') as client:
+        result=client.post('/api/chat',json={'message':'Was sind meine nächsten Termine?','share_external':True},headers={'Origin':'https://testserver'}).json()
+        assert 'Testtermin' in result['answer']
+        assert '10:00' in result['answer']
+        assert not result['external_used']
+        assert result['duration_seconds']<2
