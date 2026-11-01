@@ -544,6 +544,10 @@ def create_app(settings=None):
         raise HTTPException(501,'Messenger-Adapter noch nicht implementiert')
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     app.mount('/static',StaticFiles(directory=frontend),name='static')
+    @app.get('/favicon.ico',include_in_schema=False)
+    async def favicon():
+        return FileResponse(frontend/'favicon.ico',media_type='image/x-icon')
+
     @app.get('/sw.js')
     async def service_worker():
         return FileResponse(frontend/'sw.js',media_type='application/javascript',headers={'Cache-Control':'no-cache','Service-Worker-Allowed':'/'})

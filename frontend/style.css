@@ -2450,3 +2450,5 @@ body[data-view=chat] .notice:empty {display:none;}
 .chat-workspace:has(.welcome) #messages {flex:0 0 auto;overflow:visible;}
 .chat-workspace:has(.welcome) .chat-top {display:none;}
 @media(max-width:700px){.keyboard-open .voice-control,.keyboard-open .welcome{display:none}.keyboard-open .voice-options,.keyboard-open .chat-footnote{display:none}}
+
+img.brand-icon,img.auth-brand{object-fit:cover;aspect-ratio:1;height:auto;border:0;padding:0;flex-shrink:0;background:#0b182a;}
