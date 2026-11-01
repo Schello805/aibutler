@@ -127,7 +127,7 @@ def test_only_selected_confirmed_memories_reach_chat_model(tmp_path,monkeypatch)
     async def generate(settings,task,payload):seen.append(payload);return 'Kurze Antwort.'
     monkeypatch.setattr('backend.main.plan_question',plan);monkeypatch.setattr('backend.main.generate',generate)
     with TestClient(app,base_url='https://testserver') as client:
-        answer=chat(client,'Wie kannst du mir helfen?',share_external=True)
+        answer=chat(client,'Was ist Photosynthese?',share_external=True)
         assert answer['external_used']
     assert seen and [row['content'] for row in seen[-1]['memories']]==['Bitte antworte kurz.']
 

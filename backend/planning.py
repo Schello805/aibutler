@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class RetrievalPlan(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    intent: Literal['documents','person','purchases','account','smart_home','events','calendar','contacts']='documents'
+    intent: Literal['documents','person','purchases','account','smart_home','events','calendar','contacts','general','clarify']='documents'
     sender: str = Field(default='',max_length=100)
+    clarification:str=Field(default='',max_length=300)
     queries: list[str] = Field(default_factory=list,max_length=3)
     recent: bool = False
     sources: list[Literal['email','paperless','ntfy','smart_home','calendar','contacts']] = Field(default_factory=lambda:['email','paperless'],max_length=6)
@@ -28,8 +29,8 @@ class RetrievalPlan(BaseModel):
 
 async def plan_question(settings,question):
     raw=await generate(settings,'''Du planst ausschließlich die lokale Recherche für die Nutzerfrage, ohne sie zu beantworten. Liefere nur JSON mit exakt diesen Feldern:
-{"intent":"documents|person|purchases|account|smart_home|events|calendar|contacts","sender":"Name/Adresse oder leer","queries":["kurze inhaltliche Suchbegriffe"],"recent":true/false,"sources":["email","paperless","ntfy","smart_home","calendar","contacts"],"smart_queries":["relevante Geräte/Signalnamen"]}.
-Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Bestellungen, account für Login/Registrierung und smart_home für Gerätezustände. Wähle events für vergangene Ereignisse wie Klingeln. Wähle calendar für Termine/Verfügbarkeit und contacts für Telefonnummern/Kontaktinformationen. Kalender und Kontakte werden zusätzlich passend zur Frage live abgefragt. Sonst documents. Wähle für jede Frage passende Quellen und kombiniere sie, statt nur eine festzulegen: E-Mail für Kommunikation, Paperless für Belege, ntfy für zeitgestempelte Ereignisse, Smart Home für aktuelle Zustände. Bei Liefer-/Paketfragen sind Bestell-/Zustellmails und zeitlich passende ntfy-/Klingelereignisse relevant; Klingeln allein ist keine sichere Zustellbestätigung. Für Smart Home liefere Geräte-/Signalnamen in smart_queries. Bei Personenfragen extrahiere den Absendernamen ohne Füllwörter. Formuliere bis zu drei Suchvarianten/Synonyme, keine ganzen Fragesätze. recent bedeutet: die jüngsten passenden Belege prüfen. Keine URLs, SQL, Tools oder Aktionen.''',{'question':question})
+{"intent":"documents|person|purchases|account|smart_home|events|calendar|contacts|general|clarify","clarification":"kurze Rückfrage oder leer","sender":"Name/Adresse oder leer","queries":["kurze inhaltliche Suchbegriffe"],"recent":true/false,"sources":["email","paperless","ntfy","smart_home","calendar","contacts"],"smart_queries":["relevante Geräte/Signalnamen"]}.
+Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Bestellungen, account für Login/Registrierung und smart_home für Gerätezustände. Wähle events für vergangene Ereignisse wie Klingeln. Wähle calendar für Termine/Verfügbarkeit und contacts für Telefonnummern/Kontaktinformationen. Kalender und Kontakte werden zusätzlich passend zur Frage live abgefragt. Wähle general für allgemeines Wissen oder Gespräch mit der KI ohne persönliche Daten; sources und queries bleiben dann leer. Wähle clarify, wenn unklar ist, was gemeint ist oder welche Daten benötigt werden; formuliere genau eine konkrete Rückfrage in clarification und lasse sources/queries leer. Verwende documents nur bei erkennbarem Dokumentbezug. Durchsuche niemals vorsorglich sämtliche Dienste. Wähle für jede Frage passende Quellen und kombiniere sie, statt nur eine festzulegen: E-Mail für Kommunikation, Paperless für Belege, ntfy für zeitgestempelte Ereignisse, Smart Home für aktuelle Zustände. Bei Liefer-/Paketfragen sind Bestell-/Zustellmails und zeitlich passende ntfy-/Klingelereignisse relevant; Klingeln allein ist keine sichere Zustellbestätigung. Für Smart Home liefere Geräte-/Signalnamen in smart_queries. Bei Personenfragen extrahiere den Absendernamen ohne Füllwörter. Formuliere bis zu drei Suchvarianten/Synonyme, keine ganzen Fragesätze. recent bedeutet: die jüngsten passenden Belege prüfen. Keine URLs, SQL, Tools oder Aktionen.''',{'question':question})
     if not raw:return None
     text=raw.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
     plan=RetrievalPlan.model_validate_json(text)
@@ -73,6 +74,7 @@ def complete_plan(plan,question):
     fallback=local_plan(question)
     if plan is None:return fallback
     plan=plan.model_copy(deep=True)
+    if plan.intent in ('general','clarify'):return plan.model_copy(update={'sources':[],'queries':[]})
     if not plan.sources:plan.sources=fallback.sources
     if not plan.queries:plan.queries=fallback.queries
     # A package question needs timestamped events as well as shipping mail.

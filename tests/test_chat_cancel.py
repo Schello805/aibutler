@@ -15,7 +15,7 @@ def test_cancellation_is_owner_scoped_and_releases_chat_capacity(tmp_path,monkey
     monkeypatch.setattr(app.state.accounts,'session',lambda token:{'id':token,'role':'admin','email':'test@example.invalid'} if token else None)
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://127.0.0.1') as client:
-            request_id='a'*32;body={'message':'Was steht an?','share_external':True,'request_id':request_id}
+            request_id='a'*32;body={'message':'Was sollte ich beachten?','share_external':True,'request_id':request_id}
             headers={'cookie':'butler_session=owner-a','origin':'http://127.0.0.1'}
             running=asyncio.create_task(client.post('/api/chat',json=body,headers=headers))
             await asyncio.wait_for(started.wait(),2)
@@ -71,4 +71,25 @@ def test_disconnected_request_continues_and_can_be_recovered_without_resubmit(tm
             assert calls==['calendar']
             conversation=app.state.store.conversation(state['conversation_id'],'a')
             assert len(conversation['messages'])==2
+    asyncio.run(scenario())
+
+
+def test_dialogue_does_not_wait_for_two_busy_research_slots(tmp_path,monkeypatch):
+    entered=0;ready=asyncio.Event()
+    async def slow(*args,**kwargs):
+        nonlocal entered
+        entered+=1
+        if entered==2:ready.set()
+        await asyncio.Event().wait()
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,chat_llm_enabled=True))
+    monkeypatch.setattr('backend.main.plan_question',slow)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://127.0.0.1') as client:
+            headers={'Authorization':'Bearer test','Origin':'http://127.0.0.1'}
+            pending=[asyncio.create_task(client.post('/api/chat',headers=headers,json={'message':'Was sollte ich beachten?','request_id':letter*32,'share_external':True})) for letter in ('a','b')]
+            await asyncio.wait_for(ready.wait(),2)
+            response=await asyncio.wait_for(client.post('/api/chat',headers=headers,json={'message':'Kannst du mich gut verstehen?'}),1)
+            assert response.status_code==200 and response.json()['route']=='reply'
+            for letter in ('a','b'):await client.post('/api/chat/cancel',headers=headers,json={'request_id':letter*32})
+            assert [response.status_code for response in await asyncio.gather(*pending)]==[499,499]
     asyncio.run(scenario())

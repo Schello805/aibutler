@@ -401,8 +401,9 @@ class Store:
             db.execute('UPDATE conversations SET updated=CURRENT_TIMESTAMP WHERE id=?',(conversation_id,))
         return {'conversation_id':conversation_id,'status':'pending'}
 
-    def fail_turn(self,owner_id,request_id,cancelled=False):
+    def fail_turn(self,owner_id,request_id,cancelled=False,reason=None):
         answer='Suche abgebrochen. Deine Frage bleibt gespeichert.' if cancelled else 'Die Antwort konnte nicht abgeschlossen werden. Deine Frage bleibt gespeichert; bitte erneut versuchen.'
+        answer=reason or answer
         with self.connect() as db:
             row=db.execute("SELECT * FROM chat_turns WHERE owner=? AND request_id=? AND status='pending'",(owner_id or '',request_id)).fetchone()
             if not row:return

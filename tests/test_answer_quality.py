@@ -116,12 +116,12 @@ def test_german_purchase_total_retains_thousands_separator():
     assert '1.234,56 €' in answer and '1,234,56' not in answer
 
 
-@pytest.mark.parametrize('question',['Wie hoch sind die aktuellen Stromkosten?','Wie hoch sind die aktuellen Stromkoksten?'])
+@pytest.mark.parametrize('question',['Wie hoch ist der aktuelle Stromtarif?','Wie hoch ist der Strompreis pro Kilowattstunde?'])
 def test_simple_energy_costs_use_local_plan_and_both_document_sources(tmp_path,monkeypatch,question):
     import backend.main as main
     app=app_for(tmp_path,chat_llm_enabled=True)
     record(app.state.store,'tariff','Strom Arbeitspreis Grundpreis','Strom Tarif Arbeitspreis 30 Cent pro kWh, Grundpreis 10 Euro monatlich.')
-    record(app.state.store,'mail','Strom Abschlag','Strom Abschlag ab November: 100 Euro.',source='imap')
+    record(app.state.store,'mail','Strom Preisänderung Tarif','Strom Tarif Preisänderung ab November: neuer Grundpreis.',source='imap')
     called=[]
     async def planner(*args,**kwargs):called.append('planner');raise AssertionError('No planner needed')
     async def answer(settings,task,payload):
