@@ -5,7 +5,7 @@ import logging
 import time
 import re
 import httpx
-from .smarthome import read_iobroker, scope, utc_now, relevant_states
+from .smarthome import iobroker_error, read_iobroker, scope, utc_now, relevant_states
 from .sources import read_mail, read_paperless, search_mail, search_sender_mail, search_paperless
 from .intelligence import local_decision, generate,provider_is_limited
 from .retrieval import question_sender,job_start_context
@@ -243,8 +243,8 @@ class Worker:
             checked=utc_now()
             self.store.save_smart_snapshot(scope(settings),states,checked)
             self.status['sources']['iobroker']={'fetched':len(states),'errors':0,'checked':checked}
-        except Exception:
-            self.status['sources']['iobroker']={'error':'ioBroker-Abfrage fehlgeschlagen. Letzter Stand bleibt erhalten; Adresse, Adapter und Anmeldung prüfen.'}
+        except Exception as exc:
+            self.status['sources']['iobroker']={'error':iobroker_error(exc,settings)+' Letzter erfolgreicher Stand bleibt erhalten.'}
             log.warning('ioBroker fetch failed; preserving last snapshot')
 
     async def flush_notifications(self):

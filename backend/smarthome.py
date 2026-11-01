@@ -66,6 +66,22 @@ def classify(state_id,state):
     return 'online' if online else 'offline'
 
 
+
+def iobroker_error(exc, settings):
+    """Safe actionable diagnostics; never expose response bodies or credentials."""
+    hint=' Simple-API-/REST-API-Adresse verwenden; Port 8081 ist normalerweise die Admin-Oberfläche.'
+    if not settings.iobroker_url:return 'ioBroker-Adresse fehlt.'
+    if isinstance(exc,httpx.TimeoutException):return 'ioBroker antwortet nicht rechtzeitig. Erreichbarkeit vom Butler/LXC und Firewall prüfen.'
+    if isinstance(exc,httpx.ConnectError):return 'Keine Verbindung zu ioBroker möglich. Adapter gestartet, Adresse, Port und Firewall vom Butler/LXC aus prüfen.'
+    if isinstance(exc,httpx.HTTPStatusError):
+        code=exc.response.status_code
+        if code in (401,403):return f'ioBroker verweigert den Zugriff (HTTP {code}). Anmeldung und Leserechte des API-Adapters prüfen.'
+        if code==404:return 'ioBroker-API-Endpunkt nicht gefunden (HTTP 404). Gewählten Adaptertyp und Basis-Adresse prüfen.'+hint
+        if 300<=code<400:return 'ioBroker leitet auf eine andere Seite weiter. Direkte API-Adresse statt Anmeldeseite verwenden.'+hint
+        return f'ioBroker-API meldet HTTP {code}. Adapterstatus und dessen Protokoll prüfen.'
+    if isinstance(exc,(ValueError,TypeError)):return 'ioBroker liefert keine gültige Zustandsliste. Adaptertyp und API-Adresse prüfen.'+hint
+    return 'ioBroker-Abfrage fehlgeschlagen. Adapterstatus und Erreichbarkeit vom Butler/LXC prüfen.'
+
 async def read_iobroker(settings):
     if not settings.iobroker_url:
         raise ValueError('ioBroker-Adresse fehlt')

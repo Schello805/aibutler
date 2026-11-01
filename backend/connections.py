@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 from .intelligence import generate
 from .icloud import ICloudConfig
 from .public_data import PublicConfig,PublicData,DeviceLocation
-from .smarthome import IoBrokerConfig, read_iobroker, scope
+from .smarthome import iobroker_error, IoBrokerConfig, read_iobroker, scope
 
 SERVICE_FIELDS = {
     'icloud_calendar':{'icloud_calendar_enabled','icloud_calendar_user','icloud_calendar_password','icloud_calendar_names'},
@@ -246,6 +246,7 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         except HTTPException:
             raise
         except Exception as exc:
+            if service=='iobroker':raise HTTPException(502,iobroker_error(exc,s))
             # Never include provider exception text: it can contain credentials or URLs.
             code = exc.response.status_code if isinstance(exc,httpx.HTTPStatusError) else None
             raise HTTPException(502, 'Verbindung fehlgeschlagen'+(f' (HTTP {code})' if code else '')+'. Zugangsdaten, Freigabe und Adresse prüfen.')
