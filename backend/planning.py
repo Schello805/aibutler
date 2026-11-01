@@ -19,17 +19,17 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class RetrievalPlan(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    intent: Literal['documents','person','purchases','account','smart_home','events']='documents'
+    intent: Literal['documents','person','purchases','account','smart_home','events','calendar','contacts']='documents'
     sender: str = Field(default='',max_length=100)
     queries: list[str] = Field(default_factory=list,max_length=3)
     recent: bool = False
-    sources: list[Literal['email','paperless','ntfy','smart_home']] = Field(default_factory=lambda:['email','paperless'],max_length=4)
+    sources: list[Literal['email','paperless','ntfy','smart_home','calendar','contacts']] = Field(default_factory=lambda:['email','paperless'],max_length=6)
     smart_queries: list[str] = Field(default_factory=list,max_length=4)
 
 async def plan_question(settings,question):
     raw=await generate(settings,'''Du planst ausschließlich die lokale Recherche für die Nutzerfrage, ohne sie zu beantworten. Liefere nur JSON mit exakt diesen Feldern:
-{"intent":"documents|person|purchases|account|smart_home|events","sender":"Name/Adresse oder leer","queries":["kurze inhaltliche Suchbegriffe"],"recent":true/false,"sources":["email","paperless","ntfy","smart_home"],"smart_queries":["relevante Geräte/Signalnamen"]}.
-Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Bestellungen, account für Login/Registrierung und smart_home für Gerätezustände. Wähle events für vergangene Ereignisse wie Klingeln. Sonst documents. Wähle für jede Frage passende Quellen und kombiniere sie, statt nur eine festzulegen: E-Mail für Kommunikation, Paperless für Belege, ntfy für zeitgestempelte Ereignisse, Smart Home für aktuelle Zustände. Bei Liefer-/Paketfragen sind Bestell-/Zustellmails und zeitlich passende ntfy-/Klingelereignisse relevant; Klingeln allein ist keine sichere Zustellbestätigung. Für Smart Home liefere Geräte-/Signalnamen in smart_queries. Bei Personenfragen extrahiere den Absendernamen ohne Füllwörter. Formuliere bis zu drei Suchvarianten/Synonyme, keine ganzen Fragesätze. recent bedeutet: die jüngsten passenden Belege prüfen. Keine URLs, SQL, Tools oder Aktionen.''',{'question':question})
+{"intent":"documents|person|purchases|account|smart_home|events|calendar|contacts","sender":"Name/Adresse oder leer","queries":["kurze inhaltliche Suchbegriffe"],"recent":true/false,"sources":["email","paperless","ntfy","smart_home","calendar","contacts"],"smart_queries":["relevante Geräte/Signalnamen"]}.
+Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Bestellungen, account für Login/Registrierung und smart_home für Gerätezustände. Wähle events für vergangene Ereignisse wie Klingeln. Wähle calendar für Termine/Verfügbarkeit und contacts für Telefonnummern/Kontaktinformationen. Kalender und Kontakte werden zusätzlich passend zur Frage live abgefragt. Sonst documents. Wähle für jede Frage passende Quellen und kombiniere sie, statt nur eine festzulegen: E-Mail für Kommunikation, Paperless für Belege, ntfy für zeitgestempelte Ereignisse, Smart Home für aktuelle Zustände. Bei Liefer-/Paketfragen sind Bestell-/Zustellmails und zeitlich passende ntfy-/Klingelereignisse relevant; Klingeln allein ist keine sichere Zustellbestätigung. Für Smart Home liefere Geräte-/Signalnamen in smart_queries. Bei Personenfragen extrahiere den Absendernamen ohne Füllwörter. Formuliere bis zu drei Suchvarianten/Synonyme, keine ganzen Fragesätze. recent bedeutet: die jüngsten passenden Belege prüfen. Keine URLs, SQL, Tools oder Aktionen.''',{'question':question})
     if not raw:return None
     text=raw.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
     plan=RetrievalPlan.model_validate_json(text)

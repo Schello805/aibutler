@@ -10,12 +10,14 @@ from .intelligence import local_decision, generate
 from .retrieval import question_sender
 from .archive import backfill_batch
 from .notifications import sync_ntfy
+from .icloud import PersonalSources
 
 log = logging.getLogger(__name__)
 
 class Worker:
     def __init__(self, settings, store):
         self.s, self.store = settings, store
+        self.personal=PersonalSources(settings,store)
         self.lock = asyncio.Lock()
         self.settings_lock = asyncio.Lock()
         self.status = {'running':False, 'sources':{}}
@@ -229,6 +231,7 @@ class Worker:
                             self.store.save_sync_state(progress_key,progress)
                         self.status['sources'][name] = {'error':'Abruf fehlgeschlagen; Konfiguration/Verbindung prüfen'}
                         log.warning('Source fetch failed: %s', name)
+                await self.personal.poll()
                 await self.poll_iobroker()
                 await self.poll_ntfy()
                 await self.flush_notifications()

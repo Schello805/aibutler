@@ -18,6 +18,7 @@ from .config import Settings
 from .store import Store
 from .accounts import Accounts
 from .worker import Worker
+from .icloud import self_profile_question
 from .intelligence import generate, ProviderLimited, provider_is_limited
 from .public_data import PublicData,DeviceLocation,outdoor_question,needs_public_context,target_day
 from .planning import plan_question,complete_plan
@@ -207,7 +208,7 @@ def create_app(settings=None):
 
     @app.get('/api/status',dependencies=protected)
     async def status():
-        return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled}}
+        return {**worker.status,'sources':{**worker.status['sources'],**worker.personal.status},'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled,'icloud_calendar':s.icloud_calendar_enabled,'icloud_contacts':s.icloud_contacts_enabled}}
     @app.get('/api/sync',dependencies=protected)
     async def sync_status():
         import hashlib
@@ -233,6 +234,40 @@ def create_app(settings=None):
         if not(s.weather_enabled or s.holidays_enabled):raise HTTPException(422,'Wetter oder Feiertage zuerst aktivieren')
         try:return {'locations':await public_data.locations(value.query.strip())}
         except Exception:raise HTTPException(502,'Ortssuche ist gerade nicht verfügbar')
+
+    class ContactQuery(BaseModel):
+        query:str=Field(min_length=2,max_length=100)
+
+    class OwnContact(BaseModel):
+        contact_id:str|None=Field(default=None,pattern=r'^icloud_contacts:[a-f0-9]{64}$')
+
+    @app.post('/api/account/contact-candidates',dependencies=protected)
+    async def own_candidates(value:ContactQuery,request:Request):
+        if not request.state.user:raise HTTPException(403,'Mit einem Benutzerkonto anmelden')
+        snapshot=await worker.personal.refresh('contacts')
+        if not snapshot or snapshot['stale']:raise HTTPException(502,'Kontakte zuerst verbinden und aktuell abrufen')
+        query=value.query.casefold()
+        return {'contacts':[{'id':row['id'],'name':row['name'],'emails':row['emails']} for row in snapshot['records'] if query in (row['name']+' '+' '.join(row['emails'])).casefold()][:10]}
+
+    @app.get('/api/account/identity',dependencies=protected)
+    async def identity(request:Request):
+        user=request.state.user
+        if not user:raise HTTPException(403,'Mit einem Benutzerkonto anmelden')
+        from .icloud import account_scope
+        snapshot=store.dav_snapshot(account_scope(s,'contacts'))
+        selected=store.personal_identity(user['id'])
+        contact=next((row for row in snapshot['value']['records'] if row['id']==selected),None) if snapshot else None
+        return {'contact':{'id':contact['id'],'name':contact['name']} if contact else None}
+
+    @app.put('/api/account/identity',dependencies=protected)
+    async def set_identity(value:OwnContact,request:Request):
+        user=request.state.user
+        if not user:raise HTTPException(403,'Mit einem Benutzerkonto anmelden')
+        if value.contact_id:
+            snapshot=await worker.personal.refresh('contacts')
+            if not snapshot or snapshot['stale'] or not any(row['id']==value.contact_id for row in snapshot['records']):raise HTTPException(422,'Kontakt ist nicht im aktuellen iCloud-Bestand vorhanden')
+        store.set_personal_identity(user['id'],value.contact_id)
+        return {'saved':True}
 
     @app.get('/api/context',dependencies=protected)
     async def context():
@@ -308,16 +343,32 @@ def create_app(settings=None):
         selected=set(plan.sources)
         sender=(plan.sender if plan and plan.intent=='person' else None) or question_sender(value.message)
         queries=plan.queries if plan else []
-        async def skip_mail():return None
-        mail_task=worker.search_mail_context(value.message,sender_hint=sender,queries=queries) if 'email' in selected or not plan else skip_mail()
-        tasks=[mail_task,worker.search_document_context(queries) if 'paperless' in selected else asyncio.sleep(0),worker.poll_ntfy() if 'ntfy' in selected else asyncio.sleep(0),public_data.context(value.message,value.device_location,history)]
+        personal_task=asyncio.create_task(worker.personal.context(value.message,sender or '',store.personal_identity(user_owner(request)),display_zone,selected))
+        async def lookup_mail():
+            if 'email' not in selected:return None
+            personal=await personal_task
+            aliases=personal.get('sender_aliases',[]) if sender else []
+            results=[]
+            for hint in aliases or [sender]:
+                result=await worker.search_mail_context(value.message,sender_hint=hint,queries=queries)
+                if result:results.append(result)
+            if not results:return None
+            merged=dict(results[-1]);merged['ok']=all(result.get('ok',False) for result in results)
+            return merged
+        mail_task=lookup_mail()
+        tasks=[mail_task,worker.search_document_context(queries) if 'paperless' in selected else asyncio.sleep(0),worker.poll_ntfy() if 'ntfy' in selected else asyncio.sleep(0),public_data.context(value.message,value.device_location,history),personal_task]
         source_results=await asyncio.gather(*tasks,return_exceptions=True)
         public_context=source_results[3] if isinstance(source_results[3],dict) else {'sources':[],'diagnostics':['Öffentliche Zusatzdaten konnten nicht geladen werden.']}
+        personal_context=source_results[4] if isinstance(source_results[4],dict) else {'sources':[],'diagnostics':['iCloud-Zusatzdaten konnten nicht geladen werden.']}
         activity_hits=store.activity_context() if outdoor_question(value.message) else []
         mail_search=source_results[0] if isinstance(source_results[0],dict) else None
         if plan:
             if plan.intent=='person' and sender:
-                hits=store.sender_messages(sender)
+                aliases=personal_context.get('sender_aliases',[])
+                hits=[]
+                for alias in aliases or [sender]:hits.extend(store.sender_messages(alias))
+                hits=list({hit['item_id']:hit for hit in hits}.values());hits.sort(key=evidence_recency,reverse=True)
+                hits=hits[:5]
             elif plan.intent=='purchases':
                 hits=store.recent_purchases()
             elif plan.intent=='account':
@@ -376,7 +427,7 @@ def create_app(settings=None):
         provider_issue=None
         if interactive:
             try:
-                answer = await generate(chat_settings,'Beantworte persönliche Fragen ausschließlich anhand der bereitgestellten Quellen, Zustände und Gesprächsnachrichten. Fehlt ein passender Beleg, sage knapp, dass du es nicht weißt; erfinde keine persönlichen Tatsachen. Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Für zuletzt zählt das belegte Ereignis- oder Leistungsdatum, nicht automatisch das Rechnungs- oder Importdatum. Eine Bestätigung zur Registrierung ist von einer Anmeldung und ein angeforderter Login-Code von einem abgeschlossenen Login zu unterscheiden. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Bei Außenarbeiten verknüpfe passende frühere Bitten/Vorhaben mit den öffentlichen Wetter- und Feiertagsdaten. Eine frühere Bitte beweist nicht, dass ein Projekt noch offen ist oder dass der Nutzer jetzt dieses meint. Bei mehreren plausiblen Projekten frage kurz nach; bei einem passenden Vorhaben formuliere bedingt, z.B. falls du den Hühnerstall meinst. Beziehungsrollen wie Ehefrau dürfen nicht aus einem Namen geraten werden. Der Gerätestandort ist nicht automatisch der Projektstandort; übertrage ihn nicht stillschweigend auf das Zuhause. Bei Feiertagen bleiben kommunale Sonderfälle und Lärmregeln ungeprüft; erfinde keine Erlaubnis für laute Arbeiten. Fehlende oder veraltete Wetterdaten erlauben keine definitive Ja-Antwort. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'public_context':{k:v for k,v in public_context.items() if k!='sources'},'activity_evidence':activity_hits,'conversation':history,'current_date':datetime.now(ZoneInfo(display_zone)).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':display_zone,'current_time':datetime.now(ZoneInfo(display_zone)).isoformat()})
+                answer = await generate(chat_settings,'Beantworte persönliche Fragen ausschließlich anhand der bereitgestellten Quellen, Zustände und Gesprächsnachrichten. Fehlt ein passender Beleg, sage knapp, dass du es nicht weißt; erfinde keine persönlichen Tatsachen. Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Für zuletzt zählt das belegte Ereignis- oder Leistungsdatum, nicht automatisch das Rechnungs- oder Importdatum. Eine Bestätigung zur Registrierung ist von einer Anmeldung und ein angeforderter Login-Code von einem abgeschlossenen Login zu unterscheiden. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Bei Außenarbeiten verknüpfe passende frühere Bitten/Vorhaben mit den öffentlichen Wetter- und Feiertagsdaten. Eine frühere Bitte beweist nicht, dass ein Projekt noch offen ist oder dass der Nutzer jetzt dieses meint. Bei mehreren plausiblen Projekten frage kurz nach; bei einem passenden Vorhaben formuliere bedingt, z.B. falls du den Hühnerstall meinst. iCloud-Termine und Kontakte sind Quellen mit Abrufzeit, kein festes Persönlichkeitsprofil. Die Abrufzeit ist nicht das Datum der inhaltlichen Änderung; beachte modified/REV, sofern vorhanden. Eine heute abgerufene Karte kann inhaltlich veraltet sein. Verwende Firma/Beruf nur dann für den Nutzer, wenn self_contact ausdrücklich zugeordnet ist, und formuliere laut deiner Kontaktkarte. Eine Signatur oder wiederkehrende Besprechung beweist keinen aktuellen Arbeitgeber und keine festen Arbeitszeiten. Fehlende oder veraltete Kalenderdaten erlauben keine Aussage, dass der Nutzer frei hat. Familienkalender können Termine anderer Personen enthalten; behaupte persönliche Belegung nur mit passender Zuordnung. Beachte abgelehnte oder vorläufige Einladungen und abgeschnittene Zeiträume. Explizite aktuelle Aussagen des Nutzers haben Vorrang vor abweichenden Kontaktangaben; benenne solche Widersprüche, statt eine alte Firma erneut als sicher zu behaupten. Unterscheide bestätigt, Quelle meldet, aus früheren Daten vermutet und unbekannt. Bei Widersprüchen oder notwendiger Zuordnung stelle eine kurze konkrete Rückfrage. Beziehungsrollen wie Ehefrau dürfen nicht aus einem Namen geraten werden. Der Gerätestandort ist nicht automatisch der Projektstandort; übertrage ihn nicht stillschweigend auf das Zuhause. Bei Feiertagen bleiben kommunale Sonderfälle und Lärmregeln ungeprüft; erfinde keine Erlaubnis für laute Arbeiten. Fehlende oder veraltete Wetterdaten erlauben keine definitive Ja-Antwort. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'public_context':{k:v for k,v in public_context.items() if k!='sources'},'personal_live_context':{k:v for k,v in personal_context.items() if k!='sources'},'activity_evidence':activity_hits,'conversation':history,'current_date':datetime.now(ZoneInfo(display_zone)).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':display_zone,'current_time':datetime.now(ZoneInfo(display_zone)).isoformat()})
             except ProviderLimited:
                 provider_issue='Der KI-Anbieter begrenzt gerade Anfragen (HTTP 429). Die Antwort wurde aus lokalen Belegen erstellt.'
             except Exception:
@@ -391,7 +442,7 @@ def create_app(settings=None):
             local='Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.'
         if provider_issue and not hits and not smart_context:
             local='Das kann ich gerade nicht zuverlässig aus deinen Daten beantworten. Meine KI-Auswertung ist vorübergehend nicht verfügbar.'
-        diagnostics=([provider_issue] if provider_issue else [])+public_context.get('diagnostics',[])
+        diagnostics=([provider_issue] if provider_issue else [])+public_context.get('diagnostics',[])+personal_context.get('diagnostics',[])
         if unavailable:
             diagnostics.append('Aktueller Abruf unvollständig: '+', '.join(unavailable))
         if mail_search:
@@ -422,6 +473,23 @@ def create_app(settings=None):
             sources.append({'id':'iobroker:snapshot','source':'smart_home','title':'ioBroker-Kontext','excerpt':'Passende Zustände wurden im Hintergrund berücksichtigt.'})
         # A precise locally extracted execution date/period remains available without cloud access.
         if not answer:
+            if self_profile_question(value.message):
+                own=personal_context.get('self_contact')
+                if own and own['stale']:local='Deine Kontaktkarte ist gerade nicht aktuell aus iCloud abrufbar. Deshalb kann ich deine Firmenangabe nicht bestätigen.'
+                elif own:local=('Laut deiner aktuell abgerufenen Kontaktkarte: '+own['organization']+(' · '+own['job_title'] if own['job_title'] else '')+'.') if own['organization'] else 'In deiner zugeordneten Kontaktkarte ist keine Firma eingetragen.'
+                else:local='Welche Kontaktkarte gehört zu dir? Du kannst sie unter Einstellungen → Mein Konto einmal zuordnen; den Arbeitgeber lese ich dann aus der aktuellen Karte.'
+            elif personal_context.get('contacts') and re.search(r'telefon|rufnummer|handy.?nummer|e.?mail.?adresse',value.message,re.I):
+                contacts=personal_context['contacts']
+                if len(contacts)>1:local='Ich finde mehrere passende Kontakte. Wen meinst du genau?'
+                elif contacts[0]['stale']:local='Der Kontakt ist gerade nicht aktuell aus iCloud abrufbar.'
+                else:
+                    contact=contacts[0];values=contact['emails'] if re.search(r'e.?mail',value.message,re.I) else contact['phones'];local=contact['name']+': '+(', '.join(values) if values else 'Dazu ist keine Angabe im Kontakt gespeichert.')
+            calendar=personal_context.get('calendar')
+            if calendar and not self_profile_question(value.message) and not any(needs_public_context(value.message,history)):
+                if calendar['stale']:local='Dein Kalender ist gerade nicht aktuell abrufbar. Deshalb kann ich deine Verfügbarkeit nicht bestätigen.'
+                elif calendar['events']:
+                    event=calendar['events'][0];local='Im abgerufenen Zeitraum steht „'+event['title']+'“ am '+event['start'][:10]+(' (ganztägig).' if event['all_day'] else ' um '+event['start'][11:16]+' Uhr.')+(' Außerdem '+str(len(calendar['events'])-1)+' weitere Termine.' if len(calendar['events'])>1 else '')
+                else:local='Im abgerufenen Zeitraum stehen in den eingebundenen Kalendern keine Termine. Ob du tatsächlich frei hast, weiß ich daraus noch nicht.'
             if any(needs_public_context(value.message,history)):
                 if public_context.get('date_needed'):local='Welchen Tag meinst du genau? Bitte nenne ein Datum oder einen Wochentag.'
                 elif public_context.get('location_needed'):local='Für welchen Ort möchtest du das wissen? Du kannst den Standort dieses Geräts im Chat freigeben.'
@@ -435,6 +503,7 @@ def create_app(settings=None):
                     data=public_context['holidays'];local=(data['date']+': '+', '.join(row['name'] for row in data['holidays'])+'.') if data['holidays'] else 'Für diesen Tag ist in den verfügbaren Daten kein passender Feiertag eingetragen. Kommunale Ausnahmen sind nicht abgedeckt.'
                 else:local='Dafür fehlen mir gerade aktuelle Wetter- oder Feiertagsdaten. Bitte die Verbindung in den Einstellungen prüfen.'
             answer=local
+        sources.extend(personal_context.get('sources',[]))
         sources.extend(public_context.get('sources',[]))
         result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai}
         result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)

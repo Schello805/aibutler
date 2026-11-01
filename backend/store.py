@@ -22,6 +22,8 @@ class Store:
             CREATE INDEX IF NOT EXISTS conversation_order ON conversation_messages(conversation_id,id);
             CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
             CREATE INDEX IF NOT EXISTS smart_history_latest ON smart_history(scope,state_id,id DESC);
+            CREATE TABLE IF NOT EXISTS dav_snapshots(scope TEXT PRIMARY KEY,value TEXT,checked REAL);
+            CREATE TABLE IF NOT EXISTS personal_identity(user_id TEXT PRIMARY KEY,contact_id TEXT);
             CREATE TABLE IF NOT EXISTS public_cache(key TEXT PRIMARY KEY,value TEXT,checked REAL);
             CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT);
             CREATE TABLE IF NOT EXISTS mail_metadata(item_id TEXT PRIMARY KEY,sender_name TEXT,sender_address TEXT,sent_at TEXT);
@@ -44,6 +46,26 @@ class Store:
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         return db
+
+    def dav_snapshot(self,scope):
+        with self.connect() as db:
+            row=db.execute('SELECT value,checked FROM dav_snapshots WHERE scope=?',(scope,)).fetchone()
+            return {'value':json.loads(row['value']),'checked':row['checked']} if row else None
+
+    def save_dav_snapshot(self,scope,value):
+        import time
+        with self.connect() as db:db.execute('INSERT OR REPLACE INTO dav_snapshots VALUES(?,?,?)',(scope,json.dumps(value,ensure_ascii=False),time.time()))
+
+    def personal_identity(self,user_id):
+        if not user_id:return None
+        with self.connect() as db:
+            row=db.execute('SELECT contact_id FROM personal_identity WHERE user_id=?',(user_id,)).fetchone()
+            return row[0] if row else None
+
+    def set_personal_identity(self,user_id,contact_id):
+        with self.connect() as db:
+            if contact_id:db.execute('INSERT OR REPLACE INTO personal_identity VALUES(?,?)',(user_id,contact_id))
+            else:db.execute('DELETE FROM personal_identity WHERE user_id=?',(user_id,))
 
     def public_cache(self,key):
         with self.connect() as db:
@@ -113,7 +135,10 @@ class Store:
 
     def sender_messages(self,name):
         with self.connect() as db:
-            rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sender_name,m.sender_address,m.sent_at AS document_date FROM items i JOIN mail_metadata m ON m.item_id=i.id WHERE lower(m.sender_name || ' ' || m.sender_address) LIKE ? ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 5",('%'+name.lower()+'%',))
+            if '@' in name:
+                rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sender_name,m.sender_address,m.sent_at AS document_date FROM items i JOIN mail_metadata m ON m.item_id=i.id WHERE lower(m.sender_address)=? ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 5",(name.strip().casefold(),))
+            else:
+                rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.sender_name,m.sender_address,m.sent_at AS document_date FROM items i JOIN mail_metadata m ON m.item_id=i.id WHERE lower(m.sender_name || ' ' || m.sender_address) LIKE ? ORDER BY m.sent_at DESC,i.rowid DESC LIMIT 5",('%'+name.lower()+'%',))
             return [dict(row) for row in rows]
 
     def recent_account_activity(self):

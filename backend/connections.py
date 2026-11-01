@@ -9,10 +9,13 @@ from dotenv import set_key
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from .intelligence import generate
+from .icloud import ICloudConfig
 from .public_data import PublicConfig,PublicData,DeviceLocation
 from .smarthome import IoBrokerConfig, read_iobroker, scope
 
 SERVICE_FIELDS = {
+    'icloud_calendar':{'icloud_calendar_enabled','icloud_calendar_user','icloud_calendar_password','icloud_calendar_names'},
+    'icloud_contacts':{'icloud_contacts_enabled','icloud_contacts_user','icloud_contacts_password'},
     'weather':{'weather_enabled'},
     'holidays':{'holidays_enabled'},
     'llm': {'llm_provider','llm_model','llm_api_key','allow_external_llm','chat_llm_enabled','gemini_paid_confirmed'},
@@ -27,8 +30,8 @@ class ModelRequest(BaseModel):
     provider: Literal['openai','gemini']
     api_key: str | None = Field(default=None, max_length=4096)
 
-SECRET_FIELDS = {'llm_api_key','imap_password','paperless_token','ntfy_token','iobroker_password','iobroker_token'}
-class ConnectionConfig(IoBrokerConfig,PublicConfig):
+SECRET_FIELDS = {'llm_api_key','imap_password','paperless_token','ntfy_token','iobroker_password','iobroker_token','icloud_calendar_password','icloud_contacts_password'}
+class ConnectionConfig(IoBrokerConfig,PublicConfig,ICloudConfig):
     model_config = ConfigDict(extra='forbid')
     llm_provider: Literal['openai','gemini'] = 'openai'
     llm_model: str = Field(default='',max_length=150,pattern=r'^[a-zA-Z0-9._-]*$')
@@ -113,6 +116,9 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                 temp.unlink(missing_ok=True)
             for k,v in changes.items():
                 setattr(s,k,v)
+            if any(key.startswith('icloud_') for key in changes):
+                worker.personal.retry.clear()
+                worker.personal.status.clear()
         return {'saved':True}
 
     @router.put('')
@@ -120,7 +126,7 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         return await persist(value)
 
     @router.put('/{service}')
-    async def save_service(service: Literal['llm','imap','paperless','ntfy','iobroker','weather','holidays'], value: ConnectionConfig):
+    async def save_service(service: Literal['llm','imap','paperless','ntfy','iobroker','weather','holidays','icloud_calendar','icloud_contacts'], value: ConnectionConfig):
         return await persist(value, service)
 
     @router.post('/llm/models')
@@ -184,8 +190,17 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         except Exception:raise HTTPException(502,'Daten für diesen Standort nicht abrufbar.')
 
     @router.post('/{service}/test')
-    async def test(service: Literal['llm','imap','paperless','ntfy','iobroker','internet']):
+    async def test(service: Literal['llm','imap','paperless','ntfy','iobroker','internet','icloud_calendar','icloud_contacts']):
         try:
+            if service in ('icloud_calendar','icloud_contacts'):
+                from datetime import datetime,timedelta
+                from zoneinfo import ZoneInfo
+                kind=service.removeprefix('icloud_')
+                if not getattr(s,service+'_enabled'):raise ValueError('Verbindung zuerst aktivieren')
+                start=datetime.now(ZoneInfo('Europe/Berlin')).replace(hour=0,minute=0,second=0,microsecond=0)
+                result=await worker.personal.refresh(kind,start,start+timedelta(days=1),force=True) if kind=='calendar' else await worker.personal.refresh(kind,force=True)
+                if not result or result['stale']:raise ValueError('iCloud nicht lesbar')
+                return {'ok':True,'message':'iCloud lesend verbunden · '+str(len(result['records']))+(' Termine im Testzeitraum' if kind=='calendar' else ' Kontakte')+' · Sammlungen: '+', '.join(result['collections'])}
             if service=='llm':
                 # Explicit test sends no personal data and does not enable monitoring.
                 test_settings = s.model_copy(update={'allow_external_llm':True,'gemini_paid_confirmed':True})

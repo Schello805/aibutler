@@ -44,20 +44,22 @@ const sourceDefinitions=[
   {id:'imap',name:'E-Mails',icon:'mail',color:'blue',description:'Nachrichten, Bestellungen und Korrespondenz',unit:'Nachrichten im lokalen Index'},
   {id:'paperless',name:'Dokumente',icon:'sources',color:'peach',description:'Deine Dokumente aus Paperless-ngx',unit:'Dokumente im lokalen Index'},
   {id:'ntfy',name:'Ereignisse',icon:'notification',color:'lilac',description:'Benachrichtigungen und zeitliche Zusammenhänge',unit:'lokal gespeicherte Meldungen'},
+  {id:'icloud_calendar',name:'Kalender',icon:'history',color:'blue',description:'Termine und verfügbare Zeit aus iCloud',unit:'Termine im letzten Abrufzeitraum'},
+  {id:'icloud_contacts',name:'Kontakte',icon:'mail',color:'lilac',description:'Personen und Kontaktdaten aus iCloud',unit:'Kontakte im letzten vollständigen Abruf'},
   {id:'iobroker',name:'Smart Home',icon:'home',color:'green',description:'Passende Zustände aus deinem ioBroker',unit:'Kontext bei passenden Fragen'}
 ];
 function renderSources(status,sync){
   $('source-preview').replaceChildren();$('source-grid').replaceChildren();let configuredCount=0;
   for(const definition of sourceDefinitions){
     const id=definition.id,health=status.sources[id==='ntfy'?'ntfy_history':id]||{};
-    const configured=status.configured_sources?.[id]??Boolean(savedConfig&&(id==='imap'?savedConfig.imap_host:id==='paperless'?savedConfig.paperless_url:id==='ntfy'?(savedConfig.ntfy_history_urls||savedConfig.ntfy_url):savedConfig.iobroker_url));
+    const configured=status.configured_sources?.[id]??Boolean(savedConfig&&(id==='imap'?savedConfig.imap_host:id==='paperless'?savedConfig.paperless_url:id==='ntfy'?(savedConfig.ntfy_history_urls||savedConfig.ntfy_url):id.startsWith('icloud_')?savedConfig[id+'_enabled']:savedConfig.iobroker_url));
     if(configured)configuredCount++;
-    const count=sync.indexed[id]||0;
+    const count=id.startsWith('icloud_')?(health.fetched||0):(sync.indexed[id]||0);
     const statusText=!configured?'Noch nicht verbunden':health.disabled?'Abruf pausiert':health.error||health.errors?'Abruf prüfen':Object.keys(health).length?'Verbunden':'Abruf wird vorbereitet';
     const state=!configured||health.disabled?'off':health.error||health.errors?'error':'ok';
     const preview=node('a','source-preview-item');preview.href='#sources';preview.dataset.state=state;
     const badge=node('span','source-icon '+definition.color);badge.append(iconNode(definition.icon));
-    const text=node('span');text.append(node('strong','',definition.name),node('small','',id==='iobroker'?(configured?'Bei passenden Fragen':'Noch nicht verbunden'):count.toLocaleString('de-DE')+' '+(id==='imap'?'Nachrichten':id==='paperless'?'Dokumente':'Meldungen')));
+    const text=node('span');text.append(node('strong','',definition.name),node('small','',id==='iobroker'?(configured?'Bei passenden Fragen':'Noch nicht verbunden'):count.toLocaleString('de-DE')+' '+(id==='imap'?'Nachrichten':id==='paperless'?'Dokumente':id==='icloud_calendar'?'Termine':id==='icloud_contacts'?'Kontakte':'Meldungen')));
     preview.append(badge,text,node('span','tiny-dot'));$('source-preview').append(preview);
     const card=node('article','source-card');const heading=node('div','source-card-heading');const badge2=badge.cloneNode(true);const labels=node('div');labels.append(node('h2','',definition.name),node('p','source-card-description',definition.description));heading.append(badge2,labels);
     const footer=node('div','source-card-footer');const stateLabel=node('span','',statusText);stateLabel.dataset.state=state;stateLabel.prepend(node('span','dot'));const settings=node('a','','Verbindung verwalten');settings.href='#service-'+id;settings.append(iconNode('arrow'));footer.append(stateLabel,settings);
@@ -88,6 +90,7 @@ function renderInitialImport(status,sync) {
     const topics=initial.ntfy||[],complete=topics.length===initial.ntfy_topics&&topics.every(s=>!s.error&&s.checked);
     if(!complete)rows.push({name:'Benachrichtigungen',total:null,indexed:sync.indexed.ntfy||0,disabled:paused||initial.ntfy_enabled===false,error:topics.some(s=>s.error)||status.sources?.ntfy_history?.error});
   }
+  for(const [id,name] of [['icloud_calendar','iCloud-Kalender'],['icloud_contacts','iCloud-Kontakte']]){const health=status.sources?.[id];if(configured[id]&&!health?.checked)rows.push({name,total:null,indexed:health?.fetched||0,error:health?.error,disabled:paused});}
   const panel=$('initial-import'),list=$('initial-import-rows');panel.hidden=!rows.length;list.replaceChildren();
   for(const row of rows){
     const line=node('div','initial-import-row'),heading=node('div','initial-import-label');
@@ -152,7 +155,7 @@ function showEvidence(sources,diagnostics=[]) {
   const content=$('evidence-content');content.replaceChildren();
   for(const source of sources) {
     const card=document.createElement('article');card.className='evidence-card';
-    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS',weather:'WETTER · OPEN-METEO',holidays:'FEIERTAGE · NAGER.DATE'}[source.source]||'KONTEXT';
+    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS',weather:'WETTER · OPEN-METEO',holidays:'FEIERTAGE · NAGER.DATE',calendar:'ICLOUD · KALENDER',contacts:'ICLOUD · KONTAKTE'}[source.source]||'KONTEXT';
     const title=document.createElement('h3');title.textContent=source.title;
     const excerpt=document.createElement('div');excerpt.className='evidence-excerpt';excerpt.textContent=source.excerpt||'Kein Textauszug verfügbar.';card.append(type,title);
     if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):(source.source==='weather'?'Prognosetag: ':source.source==='holidays'?'Datum: ':'Dokumentdatum: ')+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
@@ -210,7 +213,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
-  const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
+  const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
@@ -234,7 +237,7 @@ async function restoreLogin(){
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
   connected=true;if(!$('messages').children.length)welcome();
   if(currentUser.role==='admin')await loadConnections();if(revision!==authRevision)return;
-  const results=await Promise.allSettled([refresh(),api('context'),loadConversations(),loadAccounts()]);
+  const results=await Promise.allSettled([refresh(),api('context'),loadConversations(),loadAccounts(),loadMyIdentity()]);
   if(revision!==authRevision)return;
   if(results[1].status==='fulfilled'){$('context-json').value=JSON.stringify(results[1].value);if(currentUser.role==='admin')renderContext();}
   const remembered=localStorage.getItem(conversationKey());if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))await openConversation(remembered);
@@ -249,6 +252,12 @@ $('login-form').onsubmit=async event=>{
   catch(e){$('login-error').textContent=e.message;}finally{$('login-submit').disabled=false;}
 };
 $('logout').onclick=async()=>{try{await api('session',{method:'DELETE'});}catch{}broadcastAuth();await showLogin();};
+async function loadMyIdentity(){
+  const actor=currentUser?.id;if(!actor)return;const result=await api('account/identity');if(currentUser?.id!==actor)return;
+  $('my-contact-status').textContent=result.contact?'Zugeordnet: '+result.contact.name+' · Angaben werden aus iCloud aktualisiert.':'Noch keine eigene Kontaktkarte zugeordnet.';
+}
+$('my-contact-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;$('my-contact-results').textContent='Suche in iCloud-Kontakten …';try{const result=await api('account/contact-candidates',{method:'POST',body:JSON.stringify({query:$('my-contact-query').value})});if(revision!==authRevision)return;$('my-contact-results').replaceChildren();for(const contact of result.contacts){const button=node('button','secondary','Das bin ich: '+contact.name+' · '+contact.emails.join(', '));button.type='button';button.onclick=async()=>{try{await api('account/identity',{method:'PUT',body:JSON.stringify({contact_id:contact.id})});if(revision!==authRevision)return;$('my-contact-results').replaceChildren();await loadMyIdentity();}catch(e){if(revision===authRevision)$('my-contact-status').textContent=e.message;}};$('my-contact-results').append(button);}if(!result.contacts.length)$('my-contact-results').textContent='Kein passender Kontakt gefunden.';}catch(e){if(revision===authRevision)$('my-contact-results').textContent=e.message;}};
+$('clear-my-contact').onclick=async()=>{try{await api('account/identity',{method:'PUT',body:JSON.stringify({contact_id:null})});await loadMyIdentity();}catch(e){notice(e.message);}};
 $('password-form').onsubmit=async event=>{event.preventDefault();try{await api('account/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value})});authRevision++;broadcastAuth();$('password-form').reset();$('password-status').textContent='Passwort geändert. Andere Sitzungen wurden abgemeldet.';}catch(e){$('password-status').textContent=e.message;}};
 $('new-account-form').onsubmit=async event=>{event.preventDefault();try{await api('accounts',{method:'POST',body:JSON.stringify({email:$('new-account-email').value,password:$('new-account-password').value,role:$('new-account-role').value})});$('new-account-form').reset();$('new-account-status').textContent='Konto angelegt.';await loadAccounts();}catch(e){$('new-account-status').textContent=e.message;}};
 $('connect').onclick = async () => {
@@ -367,6 +376,8 @@ const services = [
   {id:'ntfy', title:'Benachrichtigungen', icon:'♧', description:'Nur wichtige neue Hinweise oder eine gebündelte Zusammenfassung. Keine Meldungen für Chat, Einstellungen oder Altbestände. Der Test sendet eine Testnachricht.', fields:[
     ['ntfy_url','Vollständige Topic-URL','url'], ['ntfy_token','Token (optional)','password'], ['ntfy_mode','Benachrichtigungen','ntfy-mode'], ['ntfy_interval_seconds','Mindestabstand (Minuten)','minutes'], ['ntfy_history_urls','Ereignis-Topics zum Lesen (eine vollständige URL pro Zeile)','textarea'], ['ntfy_history_enabled','ntfy-Verlauf lokal archivieren und als KI-Kontext nutzen','checkbox']
   ]},
+  {id:'icloud_calendar',title:'iCloud · Kalender',description:'Kalender einschließlich für deinen Apple-Account freigegebener Kalender rein lesend einbinden. Nur ausgewählte Kalender werden abgefragt. Apple verlangt ein app-spezifisches Passwort; kein normales Apple-Passwort eingeben. Quellen sind im Butler gemeinsam nutzbar.',fields:[['icloud_calendar_enabled','Kalenderabfragen aktivieren','checkbox'],['icloud_calendar_user','Apple-Account / E-Mail','text'],['icloud_calendar_password','App-spezifisches Passwort','password'],['icloud_calendar_names','Kalendernamen (optional; leer = alle lesbaren, mit Komma getrennt)','text']]},
+  {id:'icloud_contacts',title:'iCloud · Kontakte',description:'Namen, E-Mail-Adressen, Telefonnummern und Firmenangaben lesend aktualisieren. Keine automatische Änderung deiner Kontakte. Eigene Kontaktkarte unter Mein Konto einmal zuordnen; Firmenangaben werden danach dynamisch gelesen. Quellen sind im Butler gemeinsam nutzbar.',fields:[['icloud_contacts_enabled','Kontaktabfragen aktivieren','checkbox'],['icloud_contacts_user','Apple-Account / E-Mail','text'],['icloud_contacts_password','App-spezifisches Passwort','password']]},
   {id:'iobroker', title:'ioBroker · Smart Home', icon:'⌂', description:'Smart-Home-Zustände im Hintergrund als Kontext für deine KI-Fragen bereitstellen.', fields:[
     ['iobroker_url','API-Adresse (nicht die Admin-Oberfläche)','url'], ['iobroker_api','API-Adapter','iobroker-api'],
     ['iobroker_user','Benutzername (optional)','text'], ['iobroker_password','Passwort (optional)','password'],
@@ -392,7 +403,7 @@ function option(select, value, text) {
 for (const service of services) {
   const card=document.createElement('article');card.className='connection-card';card.id='service-'+service.id;
   const heading=document.createElement('div');heading.className='connection-heading';
-  const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',weather:'home',holidays:'history',internet:'arrow'}[service.id]));
+  const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',weather:'home',holidays:'history',icloud_calendar:'history',icloud_contacts:'mail',internet:'arrow'}[service.id]));
   const title=document.createElement('h3');title.textContent=service.title;heading.append(icon,title);card.append(heading);
   const description=document.createElement('p');description.textContent=service.description;card.append(description);
   const fieldset=document.createElement('fieldset');fieldset.id='fields-'+service.id;fieldset.disabled=true;
@@ -431,6 +442,7 @@ for (const service of services) {
     const hint=document.createElement('p');hint.className='hint';hint.append(document.createTextNode('Der KI-Test sendet nur einen Testprompt und kann API-Kosten verursachen. Die Modellliste garantiert noch keine Chat-Kompatibilität. '));
     const link=document.createElement('a');link.href='https://ai.google.dev/gemini-api/terms';link.target='_blank';link.rel='noopener';link.textContent='Gemini-Datenbedingungen';hint.append(link);fieldset.append(hint);
   }
+  if(service.id.startsWith('icloud_')){const hint=node('p','hint');const link=node('a','','App-spezifisches Passwort bei Apple einrichten ↗');link.href='https://support.apple.com/de-de/102654';link.target='_blank';link.rel='noopener noreferrer';hint.append(link);fieldset.append(hint);}
   if(service.id==='iobroker') {
     const hint=document.createElement('p');hint.className='hint';hint.textContent='Die Admin-Oberfläche (meist Port 8081) ist keine Zustands-API. Nutze den installierten Simple-API- oder REST-API-Adapter mit seinem konfigurierten Port. Leere Datenpunkt-Muster verwenden die Standardwerte connected, reachable, online und UNREACH. Optional prüft *.alive den Adapterbetrieb, nicht zwingend ein Gerät. Zusätzliche Muster wie zigbee.0.*.temperature liefern Messwerte. Ein ausgeschaltetes Licht gilt nicht als offline. Die Werte dienen der KI als Fragekontext. Es werden keine Zustandslisten oder einzelnen Statusmeldungen in der Oberfläche ausgegeben.';fieldset.append(hint);
   }

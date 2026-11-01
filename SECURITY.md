@@ -18,11 +18,17 @@ Stand: 31.10.2026. Dies ist eine Prüfung und Härtung des Quellcodes, kein unab
 
 Die automatisierten Tests prüfen unter anderem Kontoisolation, Rollen, Widerruf von Sitzungen, Origin-Prüfung, Geheimnis-Redaktion, Sicherheitsheader, private Dateirechte, Body-Grenzen einschließlich falscher Content-Length sowie das Freigeben belegter Chat-Slots.
 
-`pip-audit` hat am 31.10.2026 für die 47 tatsächlich in der lokalen Entwicklungsumgebung installierten Pakete keine bekannten Schwachstellen gemeldet. Das ist eine Momentaufnahme bekannter Meldungen, keine Sicherheitsgarantie. Der Paketstand im LXC kann abweichen und wurde nicht direkt geprüft. Eine separate, temporäre Tool-Umgebung wurde verwendet; private Konfiguration oder Dokumentinhalte wurden nicht an den Prüfdienst übertragen.
+`pip-audit` wurde nach Ergänzung der iCloud-Parser erneut ausgeführt und hat für die 56 tatsächlich in der lokalen Entwicklungsumgebung installierten Pakete keine bekannten Schwachstellen gemeldet. Das ist eine Momentaufnahme bekannter Meldungen, keine Sicherheitsgarantie. Der Paketstand im LXC kann abweichen und wurde nicht direkt geprüft. Eine separate, temporäre Tool-Umgebung wurde verwendet; private Konfiguration oder Dokumentinhalte wurden nicht an den Prüfdienst übertragen.
 
 ## Paketaktualisierung bei schnelleren Updates
 
 Unveränderte Python-Abhängigkeiten werden bis zu sieben Tage in einer unveränderten Umgebung wiederverwendet. Geänderte Paketanforderungen oder Python-/Sprachkonfiguration erzeugen eine neue Umgebung; `aibutler update --refresh-deps` erzwingt dies sofort. Alte Umgebungen bleiben für Rollbacks erhalten. Die automatische Altersprüfung findet beim Update-Aufruf statt und ersetzt keine regelmäßigen Betriebssystem- und Anwendungsupdates. Passwörter sind auf Wunsch ab acht Zeichen zulässig; Argon2id, Fehlversuchsbegrenzung und Sitzungssperren bleiben aktiv.
+
+## iCloud und dynamische Identitätsangaben
+
+Der iCloud-Adapter verwendet app-spezifische Passwörter, feste erlaubte Apple-HTTPS-Hosts, geprüfte Weiterleitungen, sichere XML-Verarbeitung und begrenzte Antworten. Schreibende DAV-Methoden sind nicht implementiert. Credentials bleiben write-only in den lokalen Einstellungen; Kalender-/Kontaktinhalte gehen nur bei bestehender Chatfreigabe und passender Frage an die KI. Die eigene Kontaktkarten-Zuordnung ist serverseitig je Benutzerkonto getrennt. Firmenangaben werden nicht als feste Profilfakten gespeichert. Kalender-/Kontaktsnapshots werden bei Fehlern als veraltet gekennzeichnet und bei erfolgreichem Vollabruf ersetzt. Kontakt-Notizen werden nicht importiert. Quellen bleiben zwischen berechtigten Butler-Konten gemeinsam nutzbar.
+
+Die neu hinzugekommenen Parser werden über `requirements.txt` installiert; dadurch wird beim ersten Update eine neue Runtime aufgebaut. Details zur Einrichtung und zu Daten-/Zeitgrenzen stehen in der README.
 
 ## Betrieb und verbleibende Grenzen
 
