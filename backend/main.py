@@ -22,7 +22,7 @@ from .worker import Worker
 from .icloud import self_profile_question,upcoming_calendar
 from .intelligence import generate, ProviderLimited, provider_is_limited
 from .public_data import PublicData,DeviceLocation,outdoor_question,needs_public_context,target_day
-from .planning import plan_question,complete_plan,local_plan
+from .planning import plan_question,complete_plan,local_plan,energy_price_question
 from .smarthome import scope
 from .lighting import is_current_lighting_question, light_answer
 from .retrieval import relevant_evidence,purchase_evidence,local_answer, maintenance_answer, evidence_recency, question_sender, is_purchase_question, is_account_question
@@ -380,6 +380,7 @@ def create_app(settings=None):
             raise  # The detached job keeps running; only an explicit cancel stops it.
 
     async def answer_chat(value:Chat,request:Request):
+        worker.search_session.set({'question':value.message})
         started=time.monotonic();phase_started=started;phase='preparing';timings={};source_timings={}
         def stage(name,label):
             nonlocal phase,phase_started
@@ -484,7 +485,7 @@ def create_app(settings=None):
         stage('planning','Passende Quellen werden ausgewählt')
         plan=None
         quick=local_plan(value.message)
-        if quick.intent in ('person','purchases','account','events') and len(value.message.split())<=18 and not re.search(r'\bund\b|vergleich|zusammenhang|kalender|wetter|dokument|rechnung',value.message,re.I):
+        if (quick.intent in ('person','purchases','account','events') or energy_price_question(value.message)) and len(value.message.split())<=18 and not re.search(r'\bund\b|vergleich|zusammenhang|kalender|wetter|dokument|rechnung',value.message,re.I):
             plan=quick
         if interactive and plan is None:
             try:
@@ -606,6 +607,8 @@ def create_app(settings=None):
         if provider_issue and not hits and not smart_context:
             local='Das kann ich gerade nicht zuverlässig aus deinen Daten beantworten. Meine KI-Auswertung ist vorübergehend nicht verfügbar.'
         diagnostics=([provider_issue] if provider_issue else [])+(['Ein ergänzender Quellenabruf hat das Zeitlimit erreicht; der lokale Bestand wurde trotzdem durchsucht.'] if any(isinstance(item,TimeoutError) for item in source_results) else [])+public_context.get('diagnostics',[])+personal_context.get('diagnostics',[])
+        if worker.search_session.get().get('limited'):
+            diagnostics.append('Die ergänzende Bedeutungssuche hat ihr Zeitlimit erreicht; die lokale Volltextsuche wurde weiterhin verwendet.')
         if unavailable:
             diagnostics.append('Aktueller Abruf unvollständig: '+', '.join(unavailable))
         if mail_search:

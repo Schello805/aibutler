@@ -105,3 +105,21 @@ def test_queued_advertising_respects_changed_context_and_consent(tmp_path,monkey
     monkeypatch.setattr('backend.worker.generate',forbidden)
     assert asyncio.run(worker.analysis_one()) is True
     assert store.next_analysis() is None
+
+
+def test_chat_search_reuses_semantic_candidates_across_lexical_variants(tmp_path,monkeypatch):
+    store=Store(tmp_path);worker=Worker(Settings(_env_file=None,data_dir=tmp_path),store)
+    calls=[];lexical=[]
+    monkeypatch.setattr(store,'search',lambda query,**kwargs:lexical.append(query) or [])
+    monkeypatch.setattr(worker.semantic,'search',lambda query,sources:calls.append((query,sources)) or [])
+    async def scenario():
+        worker.search_session.set({'question':'Wie hoch sind meine Stromkosten?'})
+        for query in ('Strom Tarif','Strom Abschlag','Strom Grundpreis'):
+            await worker.search_context(query,source_filter=['paperless','imap'])
+            await worker.search_context(query,strict=False,source_filter=['imap','paperless'])
+        assert len(calls)==1 and calls[0][0]=='Wie hoch sind meine Stromkosten?'
+        assert len(lexical)==6
+        worker.search_session.set({'question':'Eine andere Frage'})
+        await worker.search_context('Anderer Suchbegriff',source_filter=['imap','paperless'])
+        assert len(calls)==2 and calls[-1][0]=='Eine andere Frage'
+    asyncio.run(scenario())

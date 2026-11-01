@@ -1,4 +1,5 @@
 import asyncio
+from contextvars import ContextVar
 import hashlib
 import logging
 import time
@@ -20,6 +21,7 @@ class Worker:
         self.s, self.store = settings, store
         self.personal=PersonalSources(settings,store)
         self.semantic=SemanticSearch(settings,store)
+        self.search_session=ContextVar('butler_search_session',default=None)
         self.source_locks={name:asyncio.Lock() for name in ('paperless','imap','iobroker','ntfy','icloud_calendar','icloud_contacts','notifications')}
         self.active_jobs=set()
         self.lock = asyncio.Lock()
@@ -186,9 +188,22 @@ class Worker:
     async def search_context(self,query,strict=True,source_filter=None,recent=False):
         lexical=await asyncio.to_thread(self.store.search,query,strict=strict,source_filter=source_filter,recent=recent)
         if not self.s.semantic_enabled:return lexical
-        try:semantic=await asyncio.to_thread(self.semantic.search,query,source_filter)
-        except Exception:
-            semantic=[];self.semantic.state['error']='Semantische Suche eingeschränkt; Volltextsuche bleibt aktiv.'
+        session=self.search_session.get()
+        key=tuple(sorted(set(source_filter))) if source_filter is not None else None
+        cache=session.setdefault('semantic',{}) if session is not None else {}
+        if session is not None and key in cache:semantic=cache[key]
+        else:
+            try:
+                semantic_query=session['question'] if session is not None else query
+                if session is None:semantic=await asyncio.to_thread(self.semantic.search,semantic_query,source_filter)
+                else:
+                    remaining=session.setdefault('deadline',time.monotonic()+5)-time.monotonic()
+                    if remaining<=0:raise TimeoutError()
+                    semantic=await asyncio.wait_for(asyncio.to_thread(self.semantic.search,semantic_query,source_filter),timeout=remaining)
+            except Exception:
+                semantic=[];self.semantic.state['error']='Semantische Suche eingeschränkt; Volltextsuche bleibt aktiv.'
+                if session is not None:session['limited']=True
+            if session is not None:cache[key]=semantic
         result=fuse_results(lexical,semantic)
         # Preserve requested chronology after adding semantic candidates.
         if recent:

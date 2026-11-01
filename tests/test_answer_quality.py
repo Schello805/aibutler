@@ -114,3 +114,21 @@ def test_german_purchase_total_retains_thousands_separator():
     from backend.retrieval import purchase_answer
     answer=purchase_answer([{'title':'Bestellt: Sensor','body':'* Sensor\nGesamtbetrag: 1.234,56 EUR'}])
     assert '1.234,56 €' in answer and '1,234,56' not in answer
+
+
+@pytest.mark.parametrize('question',['Wie hoch sind die aktuellen Stromkosten?','Wie hoch sind die aktuellen Stromkoksten?'])
+def test_simple_energy_costs_use_local_plan_and_both_document_sources(tmp_path,monkeypatch,question):
+    import backend.main as main
+    app=app_for(tmp_path,chat_llm_enabled=True)
+    record(app.state.store,'tariff','Strom Arbeitspreis Grundpreis','Strom Tarif Arbeitspreis 30 Cent pro kWh, Grundpreis 10 Euro monatlich.')
+    record(app.state.store,'mail','Strom Abschlag','Strom Abschlag ab November: 100 Euro.',source='imap')
+    called=[]
+    async def planner(*args,**kwargs):called.append('planner');raise AssertionError('No planner needed')
+    async def answer(settings,task,payload):
+        called.append('answer')
+        assert {'imap','paperless'}<={row['source'] for row in payload['sources']}
+        return 'Laut Tarif 30 Cent je Kilowattstunde und 10 Euro Grundpreis pro Monat.'
+    monkeypatch.setattr(main,'plan_question',planner);monkeypatch.setattr(main,'generate',answer)
+    result=ask(app,question,True)
+    assert result['external_used'] and not result['query_planned_by_ai']
+    assert called==['answer']

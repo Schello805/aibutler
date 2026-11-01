@@ -37,6 +37,11 @@ Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Best
     return plan
 
 
+def energy_price_question(question):
+    import re
+    return bool(re.search(r'strom(?:kosten|koksten|preis|tarif|abschlag)|(?:strom|elektrizität).{0,30}(?:kosten|preis|tarif|abschlag)|(?:kosten|preis|tarif|abschlag).{0,30}strom',question,re.I))
+
+
 def local_plan(question):
     """Keep relevant service lookups working when semantic planning is unavailable."""
     import re
@@ -46,6 +51,8 @@ def local_plan(question):
     from .public_data import outdoor_question
     if outdoor_question(question):
         return RetrievalPlan(queries=['bauen Garten streichen reparieren','Vorhaben','draußen arbeiten'],sources=['email','paperless'],recent=True)
+    if energy_price_question(question):
+        return RetrievalPlan(queries=['Strom Arbeitspreis Grundpreis','Strom Preisänderung Tarif','Strom Abschlag'],sources=['email','paperless'],recent=True)
     if sender:
         return RetrievalPlan(intent='person',sender=sender,queries=[sender],sources=['email'],recent=True)
     if is_purchase_question(question):
