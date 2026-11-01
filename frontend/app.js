@@ -13,7 +13,13 @@ const conversationKey=()=>'butler-conversation-'+(currentUser?.id||'anonymous');
 const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/svg','svg');el.classList.add('icon');el.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#i-'+name);el.append(use);return el;};
 const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
 function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true)); }
-function setMic(active){$('mic').classList.toggle('recording',active);$('mic').replaceChildren(active?node('span','','■'):iconNode('mic'));$('mic').setAttribute('aria-label',active?'Sprachgespräch beenden':'Sprachgespräch starten');}
+function voiceState(state,message){
+  const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','Sprechpause oder erneut tippen zum Senden'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
+  $('mic').dataset.state=state;$('mic').classList.toggle('recording',state==='recording');$('mic').setAttribute('aria-pressed',String(state!=='idle'));$('mic').setAttribute('aria-label',state==='recording'?'Frage jetzt senden':state==='idle'?'Sprachgespräch starten':'Sprachgespräch beenden');
+  $('mic').replaceChildren(state==='recording'?node('span','','■'):iconNode('mic'));
+  $('voice-label').textContent=message||labels[state][0];$('voice-hint').textContent=labels[state][1];$('voice-stop').hidden=state==='idle';
+}
+function setMic(active){if(!active)voiceState('idle');}
 function answerBubble(result){
   const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
   const answer=bubble(text,'assistant');
@@ -33,12 +39,12 @@ async function loadConversations(){
 }
 async function openConversation(id){
   if(chatBusy)return;const actor=currentUser?.id;if(!actor)return;
-  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor)return;voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
+  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor)return;stopVoice();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user');else answerBubble({...message.payload,answer:message.text});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
   catch(e){notice(e.message);}
 }
 function newConversation(){
   if(chatBusy)return;
-  voiceConversation=false;window.speechSynthesis?.cancel();if(recorder?.state==='recording')recorder.stop();setMic(false);conversationId=null;localStorage.removeItem(conversationKey());$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('question').focus();
+  stopVoice();setMic(false);conversationId=null;localStorage.removeItem(conversationKey());$('question').value='';$('question').style.height='';welcome();location.hash='chat';loadConversations().catch(()=>{});$('mic').focus();
 }
 const sourceDefinitions=[
   {id:'imap',name:'E-Mails',icon:'mail',color:'blue',description:'Nachrichten, Bestellungen und Korrespondenz',unit:'Nachrichten im lokalen Index'},
@@ -216,7 +222,7 @@ async function loadAccounts(){
 }
 async function showLogin(message=''){
   const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
-  voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();
+  stopVoice();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
   $('messages').replaceChildren();$('events').replaceChildren();$('evidence-content').replaceChildren();$('account-list').replaceChildren();$('conversation-list').replaceChildren();$('mobile-conversation-list').replaceChildren();$('context-projects').replaceChildren();
@@ -274,7 +280,7 @@ $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
   if(chatBusy)return;
   if(!connected||!currentUser)return;const actor=currentUser.id;
-  bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;
+  bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;if(voiceConversation)voiceState('thinking');
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
   try {
     let deviceLocation=null;
@@ -286,48 +292,76 @@ $('chat-form').onsubmit = async event => {
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
     loadConversations().catch(()=>{});
     if ($('speak').checked && 'speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(result.answer); utterance.lang='de-DE';
-      const voices = speechSynthesis.getVoices().filter(v=>v.localService && v.lang.startsWith('de'));
-      if (voices.length) { utterance.voice=voices[0];utterance.onend=()=>{if(voiceConversation&&$('voice-send').checked)startLocalRecording();};utterance.onerror=()=>{voiceConversation=false;notice('Vorlesen ist nicht verfügbar.');};speechSynthesis.cancel();speechSynthesis.speak(utterance); }
-      else {voiceConversation=false;notice('Keine lokale deutsche Stimme verfügbar. Vorlesen übersprungen.');}
-    }
-  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();bubble('Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally { if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');setMic(voiceConversation);loadConversations().catch(()=>{}); }}
+      const turn=voiceEpoch;
+      const voices=await localGermanVoices();if(currentUser?.id!==actor||turn!==voiceEpoch)return;
+      if(voices.length){
+        const utterance=new SpeechSynthesisUtterance(result.answer);utterance.lang='de-DE';utterance.voice=voices[0];
+        utterance.onstart=()=>{if(voiceConversation)voiceState('speaking');};
+        utterance.onend=()=>{if(turn===voiceEpoch&&voiceConversation&&$('voice-send').checked)startLocalRecording();else if(turn===voiceEpoch){voiceConversation=false;voiceState('idle');}};
+        utterance.onerror=()=>{if(turn===voiceEpoch){voiceConversation=false;voiceState('idle','Vorlesen nicht verfügbar · Antwort steht im Chat');}};
+        speechSynthesis.cancel();speechSynthesis.speak(utterance);
+      }else{voiceConversation=false;voiceState('idle','Keine lokale deutsche Stimme verfügbar');}
+    }else{voiceConversation=false;voiceState('idle');}
+
+  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();bubble('Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally { if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
 };
 for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem('butler-'+id)!=='false';
   $(id).onchange=()=>localStorage.setItem('butler-'+id,String($(id).checked));
 }
-let recorder=null,voiceConversation=false;
+// Voice lifecycle: each capture belongs to one user and one cancellable turn.
+let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null;
+function localGermanVoices(){
+  const read=()=>speechSynthesis.getVoices().filter(v=>v.localService&&v.lang.startsWith('de'));
+  const voices=read();if(voices.length)return Promise.resolve(voices);
+  return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);speechSynthesis.removeEventListener('voiceschanged',finish);resolve(read());};const timer=setTimeout(finish,1200);speechSynthesis.addEventListener('voiceschanged',finish);});
+}
+function stopVoice(){voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
 async function startLocalRecording(){
-  if(recorder||chatBusy) return;
-  const actor=currentUser?.id,revision=authRevision;if(!actor)return;
-  const stillCurrent=()=>currentUser?.id===actor&&authRevision===revision;
-  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia) {voiceConversation=false;return notice('Spracheingabe benötigt die HTTPS-Adresse deiner Webapp.');}
-  let stream;
+  if(recorder||chatBusy||voiceStarting)return;
+  const actor=currentUser?.id,revision=authRevision,turn=voiceEpoch;if(!actor)return;
+  const current=()=>currentUser?.id===actor&&authRevision===revision&&turn===voiceEpoch&&voiceConversation&&connected;
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){voiceConversation=false;voiceState('idle','Mikrofon benötigt HTTPS und einen unterstützten Browser');return;}
+  voiceStarting=true;voiceState('starting');let stream,context,timer,recording;
+  const release=()=>{clearInterval(timer);stream?.getTracks().forEach(t=>t.stop());if(context&&context.state!=='closed')context.close().catch(()=>{});if(recorder===recording)recorder=null;};
   try{
-    const status=await api('speech');if(!status.ready) throw new Error('Lokale Spracherkennung ist noch nicht eingerichtet.');
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
-    if(!stillCurrent()||!voiceConversation||!connected){stream.getTracks().forEach(track=>track.stop());return;}
-    const context=new (window.AudioContext||window.webkitAudioContext)();await context.resume();
+    // Resume inside the tap gesture: Safari can otherwise keep the analyser suspended.
+    context=new (window.AudioContext||window.webkitAudioContext)();
+    let resumeTimer;try{await Promise.race([context.resume(),new Promise((_,reject)=>{resumeTimer=setTimeout(()=>reject(new Error('Mikrofon bitte erneut antippen, um Audio zu aktivieren.')),5000);})]);}finally{clearTimeout(resumeTimer);}
+    const status=await api('speech');if(!current())return;if(!status.ready)throw new Error('Lokale Spracherkennung ist noch nicht eingerichtet.');
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});if(!current())return;
     const source=context.createMediaStreamSource(stream),analyser=context.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
     const samples=new Float32Array(analyser.fftSize),parts=[];
-    const recording=new MediaRecorder(stream);recorder=recording;
-    let lastVoice=performance.now(),heard=false;const started=lastVoice;
-    const timer=setInterval(()=>{analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((s,x)=>s+x*x,0)/samples.length);if(rms>0.015){lastVoice=performance.now();heard=true;}if((heard&&performance.now()-lastVoice>1800)||performance.now()-started>45000) recording.stop();},150);
+    const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
+    recording=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);recorder=recording;
+    let heard=false,lastVoice=performance.now();const started=lastVoice;
+    const finish=()=>{if(recording.state==='recording')recording.stop();};
+    timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.015){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>1800)||(!heard&&performance.now()-started>12000)||performance.now()-started>45000)finish();},150);
     recording.ondataavailable=event=>{if(event.data.size)parts.push(event.data);};
+    recording.onerror=()=>{release();if(current()){voiceConversation=false;voiceState('idle','Aufnahme fehlgeschlagen · bitte erneut versuchen');}};
     recording.onstop=async()=>{
-      clearInterval(timer);stream.getTracks().forEach(track=>track.stop());await context.close();if(recorder===recording)recorder=null;if(!stillCurrent())return;setMic(voiceConversation);
-      if(!voiceConversation){return;}
-      if(!heard){voiceConversation=false;return notice('Keine Sprache erkannt. Mikrofon erneut starten.');}
-      notice('Ich höre zu Ende und erkenne deine Frage lokal …');
-      try{const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream'},body:new Blob(parts,{type:recording.mimeType})});const result=await response.json();if(!response.ok)throw new Error(result.detail);if(!result.text)throw new Error('Keine Sprache erkannt.');if(!stillCurrent()||!voiceConversation||!connected)return;$('question').value=result.text;notice('');if($('voice-send').checked&&!$('send').disabled)$('chat-form').requestSubmit();}
-      catch(e){if(!stillCurrent())return;voiceConversation=false;setMic(false);notice(e.message);}
+      release();if(!current())return;
+      if(!heard||!parts.length){voiceConversation=false;voiceState('idle','Keine Sprache erkannt · bitte erneut tippen');return;}
+      voiceState('transcribing');
+      const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),90000);voiceUpload=controller;
+      try{
+        const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
+        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream'},body:audio});
+        const result=await response.json();if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'Spracherkennung fehlgeschlagen.');if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
+        $('question').value=result.text;$('question').dispatchEvent(new Event('input'));
+        if($('voice-send').checked&&!chatBusy)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle','Frage erkannt · Text prüfen und senden');$('text-entry').open=true;}
+      }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='AbortError'?'Spracherkennung dauert zu lange · bitte erneut versuchen':e.message);}}
+      finally{clearTimeout(timeout);if(voiceUpload===controller)voiceUpload=null;}
     };
-    if(!stillCurrent()||!voiceConversation||!connected){clearInterval(timer);stream.getTracks().forEach(track=>track.stop());await context.close();if(recorder===recording)recorder=null;return;}
-    recording.start();setMic(true);notice('Ich höre zu · Verarbeitung auf deinem Butler-Rechner');
-  }catch(e){stream?.getTracks().forEach(track=>track.stop());if(!stillCurrent())return;voiceConversation=false;setMic(false);notice(e.message);}
+    recording.start();voiceState('recording');
+  }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='NotAllowedError'?'Mikrofonzugriff erlauben und erneut tippen':e.message);}}
+  finally{voiceStarting=false;if(recording?.state!=='recording')release();}
 }
-$('mic').onclick=()=>{if(voiceConversation){voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();setMic(false);notice('Sprachgespräch beendet.');return;}voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
+$('mic').onclick=()=>{if(voiceConversation){if(recorder?.state==='recording'){recorder.stop();return;}stopVoice();return;}if(chatBusy||voiceStarting)return;voiceEpoch++;voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
+$('voice-stop').onclick=stopVoice;
+// End capture immediately when the app leaves the foreground; never listen invisibly.
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopVoice();});
+// End voice lifecycle.
 async function pollStatus(){
   try {if(connected)await refresh();}catch(e){if(connected)notice(e.message);}
   finally {setTimeout(pollStatus,$('initial-import').hidden?30000:5000);}

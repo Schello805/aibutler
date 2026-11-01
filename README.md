@@ -174,7 +174,7 @@ Der letzte aktive Administrator kann nicht gesperrt werden. Fehlgeschlagene Anme
 - Android: Browser-Menü → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“.
 - Desktop: Installationssymbol in der App bzw. Browser-Installationsangebot verwenden.
 
-Für Sprachgespräche Mikrofonzugriff erlauben, auf die Mikrofontaste tippen und sprechen. Bei aktivierten Optionen wird die Frage nach einer Sprechpause gesendet und die Antwort mit einer verfügbaren lokalen deutschen Systemstimme vorgelesen. Ohne solche Stimme bleibt die Antwort als Text verfügbar. Mikrofontaste erneut antippen beendet das Sprachgespräch. Installation, Audio und Berechtigungen hängen vom tatsächlichen Handy/Browser ab und müssen dort getestet werden.
+Für Sprachgespräche Mikrofonzugriff erlauben, auf die Mikrofontaste tippen und sprechen. Bei aktivierten Optionen wird die Frage nach einer Sprechpause gesendet und die Antwort mit einer verfügbaren lokalen deutschen Systemstimme vorgelesen. Ohne solche Stimme bleibt die Antwort als Text verfügbar. Während der Aufnahme sendet erneutes Antippen die Frage sofort; alternativ genügt eine Sprechpause. „Gespräch beenden“ stoppt Aufnahme, laufende Erkennung oder Vorlesen. Die große Mikrofontaste steht im Mittelpunkt; Texteingabe und Sprach-/Standortoptionen sind separat aufklappbar. Beim Wechsel in den Hintergrund wird das Sprachgespräch beendet. Installation, Audio und Berechtigungen hängen vom tatsächlichen Handy/Browser ab und müssen dort getestet werden.
 
 Der LXC muss für Chat und Recherche laufen und erreichbar sein. Die Offline-Seite enthält keine privaten Antworten; Chats und Quellen werden nicht im Browser-Offline-Cache abgelegt.
 
@@ -459,3 +459,5 @@ API-Zugriff verwendet eine gültige Sitzung oder `Authorization: Bearer <API_TOK
 Python-Umgebungen werden pro Release direkt an ihrem endgültigen Pfad erstellt: Laut [Python-venv-Dokumentation](https://docs.python.org/3/library/venv.html) sind sie wegen absoluter Interpreterpfade nicht beliebig verschiebbar. Die Dienstparameter folgen der [systemd-Dokumentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html).
 
 Die Python-Abhängigkeiten sind kompatible Versionsbereiche und kein vollständig eingefrorenes Lockfile. Jedes Update prüft die neu aufgelöste Umgebung; ein fremder Paket-/Providerfehler kann trotzdem auftreten. Shell-/API-/Backuptests ersetzen keinen vollständigen Erstinstallations- und Handytest auf deinem tatsächlichen LXC.
+
+Frontend-Sprachablauf ohne echte Audioaufnahme prüfen: `node --test tests/voice_flow.cjs`. Die Tests simulieren Berechtigungen, Safari-MP4, Abbruch, Stille und Textprüfung; sie ersetzen keinen Mikrofon-/Lautsprechertest auf dem Zielgerät.

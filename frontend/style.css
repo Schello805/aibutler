@@ -2399,3 +2399,54 @@ body[data-view=chat] main { height:var(--app-height,100dvh); }
 @media(max-width:600px){#location-dialog{padding:20px;}#location-query{font-size:16px;}}
 #my-contact-results {display:grid;gap:8px;margin:12px 0;}
 #my-contact-results button {text-align:left;overflow-wrap:anywhere;}
+
+/* Voice is the primary interaction; writing remains one tap away. */
+.chat-workspace #messages {padding:18px 28px;}
+.welcome {margin:8px auto;max-width:600px;text-align:center;}
+.welcome h1 {font-size:clamp(22px,3vw,30px);letter-spacing:-.8px;line-height:1.2;margin:0 0 8px;}
+.welcome>p {font-size:13px;line-height:1.6;margin:0;color:#7c8978;}
+#chat-form {padding-top:8px;}
+.voice-control {display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0 18px;}
+#mic {display:grid;place-items:center;width:104px;height:104px;min-height:104px;border-radius:50%;border:7px solid #edf2e9;background:#36553c;color:white;box-shadow:0 0 0 1px #dce5d7;cursor:pointer;touch-action:manipulation;}
+#mic .icon {width:38px;height:38px;}
+#mic:hover {background:#28442e;}
+#mic.recording {background:#a54b37;border-color:#f7e9e2;box-shadow:0 0 0 5px #a54b3712;}
+#mic.recording span {font-size:27px;}
+#mic[data-state=transcribing],#mic[data-state=thinking],#mic[data-state=starting] {background:#6d8065;}
+#voice-label {font-size:15px;font-weight:550;text-align:center;line-height:1.4;}
+#voice-hint {font-size:11px;color:#7c8978;text-align:center;}
+#voice-stop {background:transparent;color:#7d5c50;border:0;font-size:12px;text-decoration:underline;padding:5px;min-height:32px;}
+#voice-stop[hidden] {display:none;}
+#text-entry>summary,.voice-options>summary {font-size:12px;color:#6f8065;cursor:pointer;padding:10px 0;text-align:center;min-height:36px;}
+#text-entry .composer {padding:12px;border-radius:14px;}
+#text-entry textarea {min-height:48px;font-size:16px;}
+#text-entry .composer-context {display:none;}
+#text-entry .composer-bottom {justify-content:flex-end;}
+.voice-options {margin-top:2px;}
+.voice-options .chat-preferences {flex-wrap:wrap;gap:12px;font-size:12px;}
+.chat-footnote {font-size:10px;line-height:1.5;text-align:center;margin:6px 0 0;}
+.chat-top {height:42px;min-height:42px;}
+body[data-view=chat] .notice:empty {display:none;}
+@media(max-width:700px){
+ .chat-workspace #messages {padding:12px 20px;}
+ .chat-top {display:none;}
+ .welcome {margin:8px auto;}
+ .welcome h1 {font-size:23px;}
+ .welcome>p {font-size:12px;line-height:1.6;margin:0;}
+ #chat-form {padding:8px 20px 12px;}
+ .voice-control {padding:6px 0 10px;gap:8px;}
+ #mic {width:112px;height:112px;min-height:112px;}
+ #mic .icon {width:42px;height:42px;}
+ .initial-import {padding:8px 12px;margin:6px 16px;}
+ .initial-import-heading {font-size:11px;margin-bottom:5px;}
+ .initial-import small {display:none;}
+ .initial-import-label {font-size:10px;}
+ .initial-import-row+.initial-import-row {margin-top:5px;}
+ .chat-footnote {font-size:9px;}
+ .chat-workspace {min-height:0;}
+}
+@media(max-height:650px){.voice-control{padding:2px 0;gap:4px}#mic{width:76px;height:76px;min-height:76px}.welcome>p{display:none}.chat-footnote{display:none}}
+.chat-workspace:has(.welcome) {justify-content:center;}
+.chat-workspace:has(.welcome) #messages {flex:0 0 auto;overflow:visible;}
+.chat-workspace:has(.welcome) .chat-top {display:none;}
+@media(max-width:700px){.keyboard-open .voice-control,.keyboard-open .welcome{display:none}.keyboard-open .voice-options,.keyboard-open .chat-footnote{display:none}}
