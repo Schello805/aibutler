@@ -4,6 +4,8 @@ Eine lokale Webapp nach dem Prinzip „Fragen an dein eigenes Wissen“: Der But
 
 **Für einen dauerhaften Betrieb ist der Linux-LXC-Installer unten vorgesehen.** Die Installation richtet einen eigenen Dienstbenutzer, den automatischen Start und den Befehl `aibutler` für Updates und Wartung ein. Dein bestehender Entwicklungsstand wird dadurch nicht automatisch ins LXC übertragen; dafür gibt es unten eine Migrationsanleitung.
 
+Vorgemerkte Erweiterungen und geprüfte API-Kandidaten stehen in [ROADMAP.md](ROADMAP.md).
+
 ## 1. Voraussetzungen
 
 | Voraussetzung | Empfehlung / Bedeutung |
