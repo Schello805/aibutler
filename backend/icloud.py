@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime,date,time as daytime,timedelta
 from zoneinfo import ZoneInfo
 import hashlib
+import io
 import json
 import re
 import time
@@ -178,11 +179,30 @@ def parse_events(raw,collection,start,end,zone):
 
 
 def parse_contact(raw,scope):
-    card=vobject.readOne(raw)
+    # Select fields BEFORE vobject decodes values. Even transform=False still
+    # decodes binary PHOTO values and can fail on an irrelevant damaged photo.
+    allowed={'VERSION','UID','FN','N','EMAIL','TEL','ORG','TITLE','REV','RELATED','X-ABRELATEDNAMES','X-ABLABEL'}
+    lines=[];begins=ends=0
+    for line,_ in vobject.base.getLogicalLines(io.StringIO(raw.lstrip('\ufeff')),allowQP=True):
+        match=re.match(r'^(?:[A-Za-z0-9_-]+\.)?([A-Za-z0-9_-]+)(?=[;:])',line)
+        if not match:continue
+        name=match[1].upper().replace('_','-')
+        if name in ('BEGIN','END'):
+            if line.upper() not in ('BEGIN:VCARD','END:VCARD'):raise ValueError('Ungültige Kontaktstruktur')
+            if name=='BEGIN':begins+=1
+            else:ends+=1
+            lines.append(line)
+        elif name in allowed:lines.append(line)
+    if begins!=1 or ends!=1 or not lines or lines[0].upper()!='BEGIN:VCARD' or lines[-1].upper()!='END:VCARD':
+        raise ValueError('Unvollständige Kontaktstruktur')
+    card=vobject.readOne('\r\n'.join(lines)+'\r\n',allowQP=True)
+    if card.name!='VCARD':raise ValueError('Keine Kontaktkarte')
     def values(key):return [str(line.value)[:300] for line in card.contents.get(key,[])][:20]
     name=values('fn');uid=values('uid')
     organization=card.contents.get('org',[])
-    org=' / '.join(str(part) for part in organization[0].value) if organization else ''
+    parts=organization[0].value if organization else []
+    if not isinstance(parts,(list,tuple)):parts=[parts]
+    org=' / '.join(str(part) for part in parts)
     identifier=hashlib.sha256((scope+'\n'+(uid[0] if uid else raw)).encode()).hexdigest()
     related=[]
     for key in ('related','x-abrelatednames'):

@@ -295,3 +295,27 @@ def test_contacts_request_excludes_embedded_photos_and_notes(tmp_path,monkeypatc
     result=asyncio.run(DAV(s,'contacts').read(s))
     assert len(result['records'])==1
     assert 'private-note-not-needed' not in str(result)
+
+
+def test_corrupt_unused_photo_does_not_break_usable_contact():
+    # vobject decodes PHOTO before native transformations and raises on this value.
+    raw=CONTACT.replace('END:VCARD','PHOTO;ENCODING=b:a\r\nEND:VCARD')
+    actual=parse_contact(raw,'scope');expected=parse_contact(CONTACT,'scope')
+    assert actual==expected
+
+
+def test_legacy_quoted_printable_names_and_folded_organization():
+    raw='BEGIN:VCARD\r\nVERSION:2.1\r\nUID:old-card\r\nFN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:M=C3=BCller=\r\n=20Beispiel\r\nORG:Firma;Entwicklung\\; Forschung\r\nEMAIL:test@example.invalid\r\nEND:VCARD\r\n'
+    card=parse_contact(raw,'scope')
+    assert card['name']=='Müller Beispiel'
+    assert card['organization']=='Firma / Entwicklung; Forschung'
+    assert card['emails']==['test@example.invalid']
+
+
+def test_contact_filter_preserves_apple_group_labels_and_rejects_truncation():
+    raw=CONTACT.replace('END:VCARD','item1.X-ABRELATEDNAMES:Anna Beispiel\r\nitem1.X-ABLabel:_$!<Spouse>!$_\r\nEND:VCARD')
+    card=parse_contact(raw,'scope')
+    assert card['related'][0]['target']=='Anna Beispiel'
+    assert 'Spouse' in card['related'][0]['type']
+    with pytest.raises(ValueError):parse_contact(raw.replace('END:VCARD',''),'scope')
+    with pytest.raises(ValueError):parse_contact(raw+raw,'scope')
