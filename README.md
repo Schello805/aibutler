@@ -609,3 +609,5 @@ ioBroker-Verbindungstest und Hintergrundabruf verwenden denselben seriellen Abru
 ### Mobile Gesprächsseite
 
 Auf dem Handy stehen Begrüßung und großes Mikrofon auf der leeren Startseite zusammen. Im laufenden Gespräch wird daraus ein kompakter Bedienbereich unter dem Verlauf. Der Importstatus zeigt zunächst einen schmalen Gesamtbalken; Antippen öffnet die Details pro Quelle. Solange Teilmengen unbekannt sind, bleibt der Gesamtbalken unbestimmt. Beleg-Aktionen umbrechen auf schmalen Displays. Die sekundäre Texteingabe nutzt ein kompaktes Feld neben dem Senden-Knopf; auf kurzen Displays blendet sie das Mikrofon vorübergehend aus. Revision und Gesprächsverlauf bleiben erreichbar.
+
+Die Gesprächsansicht hebt Frage und Antwort mit unterschiedlichen Karten hervor. Dezente Animationen markieren Zuhören, laufende Suche und tatsächliches Text-Streaming; abgeschlossene Antworten werden als fertige Karte dargestellt. Die Betriebssystem-Einstellung „Bewegung reduzieren“ deaktiviert diese Animationen. Zeitstempel, Belege und aufklappbare Zeitdetails bleiben verfügbar.

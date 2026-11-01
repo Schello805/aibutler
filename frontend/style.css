@@ -2599,3 +2599,54 @@ body[data-view=chat] .chat-top {height:36px;min-height:36px;}
  body[data-view=chat] .chat-workspace:has(#text-entry[open]) .voice-control {display:none;}
  body[data-view=chat] .chat-workspace:has(.welcome) #chat-form {margin-top:0;margin-bottom:8px;}
 }
+
+/* A calm dialogue canvas: the question and answer are the visual anchors. */
+body[data-view=chat] .chat-workspace {background:radial-gradient(ellipse at 50% 15%,#edf4e944,transparent 65%);}
+.conversation-emblem {position:relative;display:grid;place-items:center;width:70px;height:70px;margin:0 auto 24px;border:1px solid #dbe7d4;border-radius:24px;background:linear-gradient(145deg,#f5f9f0,#e7f0df);box-shadow:0 12px 35px #42623909;color:#557549;transform:rotate(-6deg);animation:butler-float 6s ease-in-out infinite;}
+.conversation-emblem .icon {width:32px;height:32px;transform:rotate(6deg);}
+.welcome-kicker {display:block;font-size:9px;letter-spacing:1.7px;font-weight:600;color:#829277;margin-bottom:14px;}
+body[data-view=chat] .welcome h1 {font-weight:600;letter-spacing:-1.1px;text-wrap:balance;}
+body[data-view=chat] .bubble.assistant {background:#fff;border:1px solid #e3eadf;border-radius:6px 22px 22px 22px;padding:22px 24px;box-shadow:0 6px 26px #243d2a04;animation:dialogue-arrive .28s ease-out both;}
+body[data-view=chat] .bubble.assistant .bubble-content {font-size:16px;line-height:1.8;color:#2e4032;}
+body[data-view=chat] .bubble.user {background:#eaf1e5;border-color:#e0e9d9;border-radius:20px 20px 5px 20px;animation:dialogue-arrive .22s ease-out both;}
+body[data-view=chat] .message-role {color:#7b9072;letter-spacing:1.2px;font-weight:600;}
+body[data-view=chat] .message-meta {color:#899584;}
+body[data-view=chat] .answer-timings {color:#8c9886;}
+body[data-view=chat] .evidence-link {background:#f6f8f3;border-color:#e8ede3;color:#687e5b;border-radius:10px;transition:background .15s,transform .15s;}
+body[data-view=chat] .evidence-link:hover {background:#edf3e7;transform:translateY(-1px);}
+body[data-view=chat] .evidence-link:active {transform:translateY(0);}
+body[data-view=chat] .chat-progress {display:flex;align-items:center;gap:12px;max-width:720px;margin:10px auto 22px;padding:16px 4px;color:#75876d;font-size:12px;line-height:1.6;}
+body[data-view=chat] .chat-progress::before {content:'';flex:0 0 7px;width:7px;height:7px;border-radius:50%;background:#7e9e6e;box-shadow:12px 0 #a9bfa0,24px 0 #d2dfcb;margin-right:24px;animation:butler-thinking 1.4s ease-in-out infinite;}
+body[data-view=chat] .streaming .bubble-content::after {content:'';display:inline-block;width:5px;height:1em;vertical-align:-.12em;margin-left:5px;border-radius:2px;background:#79956b;animation:butler-caret 1s steps(2,end) infinite;}
+body[data-view=chat] #mic {position:relative;transition:background .2s,box-shadow .2s,transform .2s;}
+body[data-view=chat] #mic:active {transform:scale(.95);}
+body[data-view=chat] #mic[data-state=recording]::after {content:'';position:absolute;inset:-8px;border:1px solid #a54b3755;border-radius:50%;animation:butler-listening 1.7s ease-out infinite;pointer-events:none;}
+body[data-view=chat] #mic[data-state=thinking]::after,body[data-view=chat] #mic[data-state=transcribing]::after {content:'';position:absolute;inset:-3px;border:2px solid transparent;border-top-color:#9fb28b;border-radius:50%;animation:butler-turn 1.4s linear infinite;pointer-events:none;}
+body[data-view=chat] .voice-control:has(#mic[data-state=recording]) #voice-label {color:#a54b37;}
+@keyframes dialogue-arrive {from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes butler-float {0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-4px) rotate(-2deg)}}
+@keyframes butler-thinking {0%,100%{opacity:.45}50%{opacity:1}}
+@keyframes butler-caret {50%{opacity:0}}
+@keyframes butler-listening {from{transform:scale(.98);opacity:.8}to{transform:scale(1.25);opacity:0}}
+@keyframes butler-turn {to{transform:rotate(360deg)}}
+@media(max-width:700px){
+ body[data-view=chat] .chat-workspace #messages {padding-inline:16px;}
+ body[data-view=chat] .bubble.assistant {padding:18px 17px;border-radius:5px 20px 20px 20px;}
+ body[data-view=chat] .bubble.assistant .bubble-content {font-size:15px;line-height:1.8;}
+ body[data-view=chat] .message-role {font-size:8px;margin-bottom:10px;}
+ body[data-view=chat] .welcome {margin:6px auto;}
+ body[data-view=chat] .welcome h1 {font-size:27px;}
+ body[data-view=chat] .conversation-emblem {width:60px;height:60px;border-radius:21px;margin-bottom:20px;}
+ body[data-view=chat] .welcome-kicker {font-size:8px;letter-spacing:1.4px;}
+ body[data-view=chat] .chat-workspace:has(.welcome) #messages {padding-top:8px;padding-bottom:8px;}
+ body[data-view=chat] #chat-form {background:linear-gradient(150deg,#fff,#fafcf7);}
+}
+@media(max-width:700px) and (max-height:650px){
+ body[data-view=chat] .conversation-emblem {display:none;}
+ body[data-view=chat] .welcome-kicker {margin-bottom:8px;}
+ body[data-view=chat] .welcome h1 {font-size:23px;}
+}
+@media(prefers-reduced-motion:reduce){
+ body[data-view=chat] .bubble,body[data-view=chat] .conversation-emblem,body[data-view=chat] .chat-progress::before,body[data-view=chat] .streaming .bubble-content::after,body[data-view=chat] #mic::after {animation:none!important;}
+ body[data-view=chat] #mic,body[data-view=chat] .evidence-link {transition:none;}
+}
