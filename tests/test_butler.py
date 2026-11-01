@@ -710,7 +710,7 @@ def test_local_speech_endpoint_private_and_limits(tmp_path,monkeypatch):
     with TestClient(app) as client:
         assert client.post('/api/speech/transcribe',content=b'audio',headers={'Content-Type':'application/octet-stream'}).status_code==401
         headers={'Authorization':'Bearer test','Content-Type':'application/octet-stream'}
-        assert client.get('/api/speech',headers=headers).json()=={'local':True,'ready':False,'max_seconds':60}
+        assert client.get('/api/speech',headers=headers).json()=={'local':True,'ready':False,'max_seconds':60,'tts_ready':False,'tts_voice':'Thorsten · lokal / neuronal'}
         assert client.post('/api/speech/transcribe',content=b'',headers=headers).status_code==422
         assert client.post('/api/speech/transcribe',content=b'x'*(4*1024*1024+1),headers=headers).status_code==413
         result=client.post('/api/speech/transcribe',content=b'audio',headers=headers)

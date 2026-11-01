@@ -9,7 +9,7 @@ import secrets
 import time
 from typing import Annotated
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -692,7 +692,21 @@ def create_app(settings=None):
     speech_lock=asyncio.Lock()
     @app.get('/api/speech',dependencies=[Depends(auth)])
     async def speech_status():
-        return {'local':True,'ready':s.speech_enabled and (s.data_dir/'models/whisper-base/model.bin').is_file(),'max_seconds':60}
+        from .tts import ready
+        return {'tts_ready':s.speech_enabled and ready(s.data_dir/'models/piper'),'tts_voice':'Thorsten · lokal / neuronal','local':True,'ready':s.speech_enabled and (s.data_dir/'models/whisper-base/model.bin').is_file(),'max_seconds':60}
+
+    class SpokenText(BaseModel):
+        text:str=Field(min_length=1,max_length=2000)
+
+    @app.post('/api/speech/synthesize',dependencies=[Depends(auth)])
+    async def speech_synthesize(value:SpokenText):
+        if not s.speech_enabled:raise HTTPException(503,'Lokale Sprachausgabe ist deaktiviert.')
+        from .tts import synthesize,VoiceBusy
+        try:audio=await asyncio.to_thread(synthesize,value.text,s.data_dir/'models/piper')
+        except VoiceBusy:raise HTTPException(429,'Sprachausgabe ist gerade beschäftigt. Bitte kurz warten.')
+        except (RuntimeError,ImportError):raise HTTPException(503,'Lokale Stimme ist noch nicht eingerichtet. Bitte aibutler update mit Sprachunterstützung ausführen.')
+        except Exception:raise HTTPException(503,'Lokale Sprachausgabe ist derzeit nicht verfügbar.')
+        return Response(audio,media_type='audio/wav')
 
     @app.post('/api/speech/transcribe',dependencies=[Depends(auth)])
     async def speech_transcribe(request:Request):
@@ -725,7 +739,7 @@ def create_app(settings=None):
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     # Freeze the displayed revision and asset URLs to the same running release.
     import hashlib,subprocess
-    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js'))).hexdigest()[:10]
+    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js','speech.js'))).hexdigest()[:10]
     root=frontend.parent.resolve()
     release_match=re.fullmatch(r'\d{8}T\d{6}Z-([a-f0-9]{12})',root.name)
     revision=release_match.group(1) if release_match else ''

@@ -254,6 +254,10 @@ if $SPEECH && [[ ! -f $APP_DATA/models/whisper-base/model.bin ]]; then
     log 'Öffentliche Sprachmodell-Gewichte laden (Audio wird nicht hochgeladen) …'
     runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_speech.py"
 fi
+if $SPEECH; then
+    log 'Lokale neuronale Stimme vorbereiten (einmalig ca. 114 MB; Antworttexte bleiben lokal) …'
+    runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_tts.py"
+fi
 if $SEMANTIC; then
     log 'Lokales Suchmodell vorbereiten (einmalig ca. 220 MB; keine privaten Inhalte werden übertragen) …'
     runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_semantic.py"

@@ -1,3 +1,5 @@
 # Optional local-only speech transcription; model weights installed separately
 faster-whisper>=1.2.1,<2
 av>=14,<17
+# Offline German neural speech output (GPL-3.0 engine, CC0 Thorsten voice dataset)
+piper-tts>=1.8,<1.9
