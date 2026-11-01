@@ -20,6 +20,14 @@ class IoBrokerConfig(BaseModel):
     iobroker_token: str | None = None
     iobroker_patterns: str = Field(default=DEFAULT_PATTERNS,max_length=2000)
     iobroker_enabled: bool = False
+    iobroker_control_enabled: bool = False
+    iobroker_controls: str = Field(default='[]',max_length=16000)
+
+    @field_validator('iobroker_controls')
+    @classmethod
+    def valid_controls(cls,value):
+        from .controls import devices
+        return json.dumps([device.model_dump() for device in devices(value)],ensure_ascii=False)
 
     @field_validator('iobroker_url')
     @classmethod

@@ -227,6 +227,10 @@ def create_app(settings=None):
     app.include_router(memory_router(memories,auth))
     from .benchmark import benchmark_router
     app.include_router(benchmark_router(s,worker,admin_auth))
+    from .controls import ControlService,control_router
+    controls=ControlService(s,store)
+    app.state.controls=controls
+    app.include_router(control_router(controls,auth))
     protected = [Depends(auth)]
     @app.get('/healthz')
     async def health():
@@ -467,6 +471,10 @@ def create_app(settings=None):
                 result={'answer':str(exc),'sources':[],'diagnostics':[],'external_used':False}
             result['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(result),owner_id,request_id=value.request_id)
             return result
+        control_reply=controls.plan(input_message,owner_id)
+        if control_reply:
+            control_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(control_reply),owner_id,request_id=value.request_id)
+            return control_reply
         memory_reply=await asyncio.to_thread(memories.chat,owner_id,input_message,value.conversation_id,last)
         if memory_reply:
             memory_reply['conversation_id']=await asyncio.to_thread(store.save_exchange,value.conversation_id,input_message,timed(memory_reply),owner_id,request_id=value.request_id)
@@ -878,7 +886,7 @@ def create_app(settings=None):
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     # Freeze the displayed revision and asset URLs to the same running release.
     import hashlib,subprocess
-    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js','speech.js','chat_stream.js','benchmark.js'))).hexdigest()[:10]
+    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js','speech.js','chat_stream.js','benchmark.js','controls.js'))).hexdigest()[:10]
     root=frontend.parent.resolve()
     release_match=re.fullmatch(r'\d{8}T\d{6}Z-([a-f0-9]{12})',root.name)
     revision=release_match.group(1) if release_match else ''

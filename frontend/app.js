@@ -37,6 +37,7 @@ function answerBubble(result){
   }
   if(!result.pending&&!result.interrupted){const listen=node('button','evidence-link','Anhören');listen.type='button';listen.onclick=async()=>{const actor=currentUser?.id;stopVoice(false);try{await window.ButlerSpeech.prime();listen.disabled=true;await window.ButlerSpeech.speak(result.answer);}catch(error){if(currentUser?.id===actor)notice(error.message);}finally{listen.disabled=false;}};answer.append(listen);}
   if(result.retrieval_mode==='indexed'&&result.question){const deeper=node('button','evidence-link','Gründlicher recherchieren');deeper.type='button';deeper.onclick=()=>{if(chatBusy)return;researchRequested=true;$('question').value=result.question;$('chat-form').requestSubmit();};answer.append(deeper);}
+  if(result.control_action)window.ButlerControls?.confirmation(answer,result.control_action);
   if(result.memory_proposal)window.ButlerMemory?.proposal(answer,result.memory_proposal);
   return answer;
 }
@@ -523,7 +524,9 @@ const services = [
     ['iobroker_url','API-Adresse (nicht die Admin-Oberfläche)','url'], ['iobroker_api','API-Adapter','iobroker-api'],
     ['iobroker_user','Benutzername (optional)','text'], ['iobroker_password','Passwort (optional)','password'],
     ['iobroker_token','Bearer-Token (optional, statt Passwort)','password'], ['iobroker_patterns','Datenpunkt-Muster (mit Komma getrennt)','textarea'],
-    ['iobroker_enabled','Regelmäßig im Hintergrund prüfen','checkbox']
+    ['iobroker_enabled','Regelmäßig im Hintergrund prüfen','checkbox'],
+    ['iobroker_control_enabled','Freigegebene Geräte steuern (mit Bestätigung)','checkbox'],
+    ['iobroker_controls','Freigegebene Lampen, Steckdosen und Rollos','hidden']
   ]},
   {id:'weather',title:'Wetter · Open-Meteo',description:'Wetter am Standort des fragenden Geräts. Nur auf passende Fragen, ohne Mail- oder Dokumentinhalte an den Wetterdienst zu senden. Kostenfreie API für private, nichtkommerzielle Nutzung.',fields:[['weather_enabled','Wetterabfragen aktivieren','checkbox']]},
   {id:'holidays',title:'Feiertage · Nager.Date',description:'Feiertage passend zu Land/Bundesland des fragenden Geräts. Automatische Regionserkennung verwendet nach Standortfreigabe BigDataCloud; alternativ Ort manuell wählen. Kommunale Sonderfälle sind nicht vollständig abgedeckt.',fields:[['holidays_enabled','Feiertagsabfragen aktivieren','checkbox']]},
@@ -586,6 +589,7 @@ for (const service of services) {
   }
   if(service.id.startsWith('icloud_')){const hint=node('p','hint');const link=node('a','','App-spezifisches Passwort bei Apple einrichten ↗');link.href='https://support.apple.com/de-de/102654';link.target='_blank';link.rel='noopener noreferrer';hint.append(link);fieldset.append(hint);}
   if(service.id==='iobroker') {
+    const manage=node('button','secondary','Geräte zum Steuern freigeben');manage.type='button';manage.onclick=()=>window.ButlerControls.manage();fieldset.append(manage);
     const hint=document.createElement('p');hint.className='hint';hint.textContent='Die Admin-Oberfläche (meist Port 8081) ist keine Zustands-API. Nutze den installierten Simple-API- oder REST-API-Adapter mit seinem konfigurierten Port. Leere Datenpunkt-Muster verwenden die Standardwerte connected, reachable, online und UNREACH. Optional prüft *.alive den Adapterbetrieb, nicht zwingend ein Gerät. Zusätzliche Muster wie zigbee.0.*.temperature liefern Messwerte. Ein ausgeschaltetes Licht gilt nicht als offline. Die Werte dienen der KI als Fragekontext. Es werden keine Zustandslisten oder einzelnen Statusmeldungen in der Oberfläche ausgegeben.';fieldset.append(hint);
   }
   const actions=document.createElement('div');actions.className='service-actions';
