@@ -145,3 +145,22 @@ def test_eight_character_passwords_and_repeated_self_service_changes(tmp_path,ro
         client.delete('/api/session',headers=ORIGIN)
         assert login(client,user['email'],'eight123').status_code==401
         assert login(client,user['email'],'nextpass').status_code==200
+
+
+def test_preferred_name_is_private_persistent_and_settable_in_chat(tmp_path):
+    app=app_for(tmp_path)
+    first=app.state.accounts.create('first@example.org',PASSWORD)
+    second=app.state.accounts.create('second@example.org',PASSWORD)
+    with TestClient(app,base_url='https://testserver') as client:
+        login(client,'first@example.org')
+        result=client.put('/api/account/profile',headers=ORIGIN,json={'preferred_name':'Michael'})
+        assert result.status_code==200
+        assert result.json()['preferred_name']=='Michael'
+        assert client.get('/api/session').json()['user']['preferred_name']=='Michael'
+        assert app.state.accounts.by_id(second['id'])['preferred_name']==''
+        assert client.put('/api/account/profile',headers=ORIGIN,json={'preferred_name':'<script>alert(1)</script>'}).status_code==422
+        answer=client.post('/api/chat',headers=ORIGIN,json={'message':'Bitte nenn mich Michi.'}).json()
+        assert answer['preferred_name']=='Michi' and 'Michi' in answer['answer']
+        assert app.state.accounts.by_id(first['id'])['preferred_name']=='Michi'
+        assert Accounts(Store(tmp_path)).by_id(first['id'])['preferred_name']=='Michi'
+        assert client.put('/api/account/profile',headers=ORIGIN,json={'preferred_name':''}).status_code==200

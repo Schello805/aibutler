@@ -14,7 +14,7 @@ let bootstrapAccount=false;
 const conversationKey=()=>'butler-conversation-'+(currentUser?.id||'anonymous');
 const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/svg','svg');el.classList.add('icon');el.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#i-'+name);el.append(use);return el;};
 const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
-function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true)); }
+function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true));if(currentUser?.preferred_name)$('messages').querySelector('h1').textContent='Hallo '+currentUser.preferred_name+'. Was möchtest du wissen?'; }
 function voiceState(state,message){
   const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','Sprechpause oder erneut tippen zum Senden'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
   $('mic').dataset.state=state;$('mic').classList.toggle('recording',state==='recording');$('mic').setAttribute('aria-pressed',String(state!=='idle'));$('mic').setAttribute('aria-label',state==='recording'?'Frage jetzt senden':state==='idle'?'Sprachgespräch starten':'Sprachgespräch beenden');
@@ -264,7 +264,7 @@ async function showLogin(message=''){
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
   $('messages').replaceChildren();$('events').replaceChildren();$('evidence-content').replaceChildren();$('account-list').replaceChildren();$('conversation-list').replaceChildren();$('mobile-conversation-list').replaceChildren();$('context-projects').replaceChildren();
   for(const input of document.querySelectorAll('#app-shell input,#app-shell textarea'))if(input.type!=='checkbox')input.value='';
-  $('context-json').value='{"projects":[]}';$('source-grid').replaceChildren();$('source-preview').replaceChildren();$('account-identity').textContent='';
+  $('context-json').value='{"projects":[]}';$('source-grid').replaceChildren();$('source-preview').replaceChildren();$('account-identity').textContent='';$('preferred-name').value='';$('profile-status').textContent='';
   $('login-error').textContent=message;$('login-password').value='';$('login-password-confirm').value='';
   try{const config=await api('auth/config');if(revision!==authRevision)return;bootstrapAccount=!config.configured&&config.bootstrap_local;
     $('login-title').textContent=bootstrapAccount?'Dein Konto einrichten.':'Schön, dass du da bist.';
@@ -278,7 +278,7 @@ async function restoreLogin(){
   if(currentUser)$('use-device-location').checked=localStorage.getItem('butler-device-location-'+currentUser.id)==='true';
   if(currentUser){try{manualLocation=JSON.parse(sessionStorage.getItem('butler-manual-location-'+currentUser.id)||'null');}catch{manualLocation=null;}if(manualLocation&&!$('use-device-location').checked)$('location-status').textContent=manualLocation.label+' · manuell, bis zum Abmelden';}
   if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
-  document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
+  $('preferred-name').value=currentUser.preferred_name||'';document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
   connected=true;if(!$('messages').children.length)welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
   // Resume the chat without waiting for settings, counters or account administration.
@@ -309,6 +309,7 @@ async function loadMyIdentity(){
 }
 $('my-contact-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;$('my-contact-results').textContent='Suche in iCloud-Kontakten …';try{const result=await api('account/contact-candidates',{method:'POST',body:JSON.stringify({query:$('my-contact-query').value})});if(revision!==authRevision)return;$('my-contact-results').replaceChildren();for(const contact of result.contacts){const button=node('button','secondary','Das bin ich: '+contact.name+' · '+contact.emails.join(', '));button.type='button';button.onclick=async()=>{try{await api('account/identity',{method:'PUT',body:JSON.stringify({contact_id:contact.id})});if(revision!==authRevision)return;$('my-contact-results').replaceChildren();await loadMyIdentity();}catch(e){if(revision===authRevision)$('my-contact-status').textContent=e.message;}};$('my-contact-results').append(button);}if(!result.contacts.length)$('my-contact-results').textContent='Kein passender Kontakt gefunden.';}catch(e){if(revision===authRevision)$('my-contact-results').textContent=e.message;}};
 $('clear-my-contact').onclick=async()=>{try{await api('account/identity',{method:'PUT',body:JSON.stringify({contact_id:null})});await loadMyIdentity();}catch(e){notice(e.message);}};
+$('profile-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;try{const profile=await api('account/profile',{method:'PUT',body:JSON.stringify({preferred_name:$('preferred-name').value})});if(revision!==authRevision)return;currentUser.preferred_name=profile.preferred_name;$('preferred-name').value=profile.preferred_name;$('profile-status').textContent='Rufname gespeichert · gilt auf allen deinen Geräten.';if($('messages').querySelector('.welcome'))welcome();}catch(e){if(revision===authRevision)$('profile-status').textContent=e.message;}};
 $('password-form').onsubmit=async event=>{event.preventDefault();try{await api('account/password',{method:'POST',body:JSON.stringify({current_password:$('current-password').value,new_password:$('new-password').value})});authRevision++;broadcastAuth();$('password-form').reset();$('password-status').textContent='Passwort geändert. Andere Sitzungen wurden abgemeldet.';}catch(e){$('password-status').textContent=e.message;}};
 $('new-account-form').onsubmit=async event=>{event.preventDefault();try{await api('accounts',{method:'POST',body:JSON.stringify({email:$('new-account-email').value,password:$('new-account-password').value,role:$('new-account-role').value})});$('new-account-form').reset();$('new-account-status').textContent='Konto angelegt.';await loadAccounts();}catch(e){$('new-account-status').textContent=e.message;}};
 $('connect').onclick = async () => {
@@ -366,7 +367,7 @@ $('chat-form').onsubmit = async event => {
     if(currentUser?.id!==actor||revision!==authRevision)return;
     const result = await chatWithRecovery(search,{message,request_id:search.requestId,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId});search.finish();
     if(currentUser?.id!==actor||revision!==authRevision)return;
-    progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
+    progress.remove();if(typeof result.preferred_name==='string'){currentUser.preferred_name=result.preferred_name;$('preferred-name').value=result.preferred_name;}answerBubble(result);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
     locationQuestion=result.clarification==='location'?{message:result.pending_question||message,actor,conversationId}:null;
     loadConversations().catch(()=>{});

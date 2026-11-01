@@ -30,7 +30,7 @@ def verify_password(encoded,password):
 
 
 def public_user(row):
-    return {key:row[key] for key in ('id','email','role','active')}
+    return {key:row[key] for key in ('id','email','role','active','preferred_name')}
 
 
 class Accounts:
@@ -43,8 +43,16 @@ class Accounts:
             CREATE INDEX IF NOT EXISTS session_owner ON user_sessions(user_id);
             CREATE TABLE IF NOT EXISTS login_limits(key TEXT PRIMARY KEY,attempts INTEGER NOT NULL,started REAL NOT NULL);
             ''')
+            if 'preferred_name' not in {row['name'] for row in db.execute('PRAGMA table_info(users)')}:db.execute("ALTER TABLE users ADD COLUMN preferred_name TEXT NOT NULL DEFAULT ''")
             columns={row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
             if 'owner_id' not in columns:db.execute('ALTER TABLE conversations ADD COLUMN owner_id TEXT')
+
+    def set_name(self,user_id,name):
+        name=' '.join(name.split())
+        if len(name)>60 or any(not (char.isalpha() or char in " '-’") for char in name):raise ValueError('Bitte einen Rufnamen mit höchstens 60 Zeichen eingeben.')
+        with self.store.connect() as db:
+            if not db.execute('UPDATE users SET preferred_name=? WHERE id=?',(name,user_id)).rowcount:raise ValueError('Konto nicht gefunden')
+        return self.by_id(user_id)
 
     def count(self):
         with self.store.connect() as db:return db.execute('SELECT count(*) FROM users').fetchone()[0]
@@ -65,7 +73,7 @@ class Accounts:
         return {'id':user_id,'email':email,'role':role,'active':1}
 
     def list(self):
-        with self.store.connect() as db:return [public_user(row) for row in db.execute('SELECT id,email,role,active FROM users ORDER BY created,id')]
+        with self.store.connect() as db:return [public_user(row) for row in db.execute('SELECT id,email,role,active,preferred_name FROM users ORDER BY created,id')]
 
     def by_id(self,user_id):
         with self.store.connect() as db:
