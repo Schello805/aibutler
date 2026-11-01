@@ -461,3 +461,5 @@ Python-Umgebungen werden pro Release direkt an ihrem endgültigen Pfad erstellt:
 Die Python-Abhängigkeiten sind kompatible Versionsbereiche und kein vollständig eingefrorenes Lockfile. Jedes Update prüft die neu aufgelöste Umgebung; ein fremder Paket-/Providerfehler kann trotzdem auftreten. Shell-/API-/Backuptests ersetzen keinen vollständigen Erstinstallations- und Handytest auf deinem tatsächlichen LXC.
 
 Frontend-Sprachablauf ohne echte Audioaufnahme prüfen: `node --test tests/voice_flow.cjs`. Die Tests simulieren Berechtigungen, Safari-MP4, Abbruch, Stille und Textprüfung; sie ersetzen keinen Mikrofon-/Lautsprechertest auf dem Zielgerät.
+
+Der Chatstart lädt Einstellungen, Importzähler und Kontoverwaltung im Hintergrund; der letzte Chat wartet nicht auf diese Verwaltungsabfragen. Modelllisten werden beim Chatstart nicht automatisch beim KI-Anbieter angefordert. SQLite verwendet WAL, damit Leser während laufender Importtransaktionen den letzten freigegebenen Stand lesen können. Datenbankdateien einschließlich möglicher `-wal`/`-shm`-Dateien nicht bei laufendem Dienst einzeln kopieren; für Sicherungen den verwalteten Backup-Befehl verwenden.

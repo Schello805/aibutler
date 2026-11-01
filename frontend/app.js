@@ -181,9 +181,20 @@ function showEvidence(sources,diagnostics=[]) {
 }
 $('evidence-close').onclick=()=>$('evidence-dialog').close();
 $('evidence-dialog').addEventListener('click',event=>{if(event.target===$('evidence-dialog')){const bounds=event.target.getBoundingClientRect();if(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom) event.target.close();}});
-async function refresh() {
-  const actor=currentUser?.id;if(!actor)return;
-  const [status, events, sync] = await Promise.all([api('status'),api('events'),api('sync')]);if(currentUser?.id!==actor)return;
+let refreshTask=null,refreshRevision=-1;
+function refresh(){
+  if(refreshTask&&refreshRevision===authRevision)return refreshTask;
+  refreshRevision=authRevision;
+  const pending=refreshData().finally(()=>{if(refreshTask===pending)refreshTask=null;});refreshTask=pending;return pending;
+}
+async function refreshData() {
+  const actor=currentUser?.id,revision=authRevision;if(!actor)return;
+  const status=await api('status');if(currentUser?.id!==actor||revision!==authRevision)return;
+  // Enable conversation immediately; archive counters/findings are secondary.
+  chatAiEnabled=Boolean(status.external_llm);$('send').disabled=chatBusy||!connected;
+  publicServices={weather:!!status.configured_sources?.weather,holidays:!!status.configured_sources?.holidays};
+  $('connection').textContent=status.external_llm?'Chat-KI bereit':'Lokale Suche';
+  const [events,sync]=await Promise.all([api('events'),api('sync')]);if(currentUser?.id!==actor||revision!==authRevision)return;
   const archives=sync.states.filter(state=>state.key.startsWith('mail-archive:'));
   const total=archives.reduce((sum,state)=>sum+(state.total||0),0);
   const indexed=archives.reduce((sum,state)=>sum+(state.indexed||0),0);
@@ -244,12 +255,17 @@ async function restoreLogin(){
   document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
   connected=true;if(!$('messages').children.length)welcome();
-  if(currentUser.role==='admin')await loadConnections();if(revision!==authRevision)return;
-  const results=await Promise.allSettled([refresh(),api('context'),loadConversations(),loadAccounts(),loadMyIdentity()]);
-  if(revision!==authRevision)return;
-  if(results[1].status==='fulfilled'){$('context-json').value=JSON.stringify(results[1].value);if(currentUser.role==='admin')renderContext();}
-  const remembered=localStorage.getItem(conversationKey());if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))await openConversation(remembered);
-  if(results[0].status==='rejected')notice('Statusübersicht derzeit nicht verfügbar.');
+  // Resume the chat without waiting for settings, counters or account administration.
+  const remembered=localStorage.getItem(conversationKey());
+  if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))openConversation(remembered).catch(()=>{});
+  refresh().catch(()=>{if(revision===authRevision)notice('Statusübersicht derzeit nicht verfügbar.');});
+  loadConversations().catch(()=>{});
+  if(currentUser.role==='admin'){
+    loadConnections().catch(()=>{if(revision===authRevision)notice('Einstellungen konnten noch nicht geladen werden.');});
+    loadAccounts().catch(()=>{});
+  }
+  loadMyIdentity().catch(()=>{});
+  api('context').then(value=>{if(revision!==authRevision)return;$('context-json').value=JSON.stringify(value);if(currentUser.role==='admin')renderContext();}).catch(()=>{});
 }
 $('login-form').onsubmit=async event=>{
   event.preventDefault();if(!window.isSecureContext){$('login-error').textContent='Bitte die HTTPS-Adresse oder den lokalen SSH-Tunnel verwenden.';return;}
@@ -516,7 +532,7 @@ async function loadConnections() {
     fillService(service,savedConfig);
     setServiceStatus(service.id,service.id==='internet'?'Bereit zur Prüfung.':'Gespeicherte Einstellungen geladen');
   }
-  if(savedConfig.secrets.llm_api_key) loadModels();
+  if(savedConfig.secrets.llm_api_key&&document.body.dataset.view==='settings')loadModels();
 }
 async function saveService(service,button) {
   const actor=currentUser?.id;if(!actor)return;

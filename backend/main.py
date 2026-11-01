@@ -99,7 +99,7 @@ def create_app(settings=None):
     async def auth(request:Request,authorization:str=Header(default='')):
         request.state.user=None
         if s.api_token and authorization and secrets.compare_digest(authorization,'Bearer '+s.api_token):return
-        user=accounts.session(request.cookies.get(cookie_name,''))
+        user=await asyncio.to_thread(accounts.session,request.cookies.get(cookie_name,''))
         if not user:raise HTTPException(401,'Bitte mit E-Mail-Adresse und Passwort anmelden')
         request.state.user=user
         if request.method not in ('GET','HEAD','OPTIONS'):same_origin(request)
@@ -211,7 +211,7 @@ def create_app(settings=None):
     async def status():
         return {**worker.status,'sources':{**worker.status['sources'],**worker.personal.status,'semantic':dict(worker.semantic.state)},'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled,'icloud_calendar':s.icloud_calendar_enabled,'icloud_contacts':s.icloud_contacts_enabled}}
     @app.get('/api/sync',dependencies=protected)
-    async def sync_status():
+    def sync_status():
         import hashlib
         from .notifications import history_urls
         overview=store.sync_overview()
@@ -251,7 +251,7 @@ def create_app(settings=None):
         return {'contacts':[{'id':row['id'],'name':row['name'],'emails':row['emails']} for row in snapshot['records'] if query in (row['name']+' '+' '.join(row['emails'])).casefold()][:10]}
 
     @app.get('/api/account/identity',dependencies=protected)
-    async def identity(request:Request):
+    def identity(request:Request):
         user=request.state.user
         if not user:raise HTTPException(403,'Mit einem Benutzerkonto anmelden')
         from .icloud import account_scope
@@ -271,14 +271,14 @@ def create_app(settings=None):
         return {'saved':True}
 
     @app.get('/api/context',dependencies=protected)
-    async def context():
+    def context():
         return store.context()
     @app.put('/api/context',dependencies=[Depends(admin_auth)])
     async def update_context(value: Context):
         store.save_context(value.model_dump())
         return value
     @app.get('/api/events',dependencies=protected)
-    async def events():
+    def events():
         return store.events()
     @app.post('/api/scan',dependencies=[Depends(admin_auth)])
     async def scan():
@@ -287,11 +287,11 @@ def create_app(settings=None):
         await worker.tick()
         return worker.status
     @app.get('/api/conversations',dependencies=protected)
-    async def conversations(request:Request):
+    def conversations(request:Request):
         return store.conversations(user_owner(request))
 
     @app.get('/api/conversations/{conversation_id}',dependencies=protected)
-    async def conversation(conversation_id:str,request:Request):
+    def conversation(conversation_id:str,request:Request):
         result=store.conversation(conversation_id,user_owner(request))
         if result is None:raise HTTPException(404,'Gespräch nicht gefunden')
         return result

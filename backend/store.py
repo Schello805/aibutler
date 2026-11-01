@@ -17,6 +17,8 @@ class Store:
         os.close(descriptor)
         self.path.chmod(0o600)
         with self.connect() as db:
+            # Readers must remain responsive while archive/vector workers commit.
+            db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
             CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,title TEXT,updated TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS conversation_messages(id INTEGER PRIMARY KEY,conversation_id TEXT,role TEXT,text TEXT,payload TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -24,6 +26,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
             CREATE INDEX IF NOT EXISTS smart_history_latest ON smart_history(scope,state_id,id DESC);
             CREATE TABLE IF NOT EXISTS chunk_fingerprints(chunk_id INTEGER PRIMARY KEY,item_id TEXT,digest TEXT);
+            CREATE INDEX IF NOT EXISTS chunk_fingerprints_item ON chunk_fingerprints(item_id);
             CREATE TABLE IF NOT EXISTS semantic_state(model TEXT,chunk_id INTEGER,item_id TEXT,digest TEXT,PRIMARY KEY(model,chunk_id));
             CREATE TABLE IF NOT EXISTS analysis_queue(item_id TEXT PRIMARY KEY,version TEXT,attempts INTEGER DEFAULT 0,available REAL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS dav_snapshots(scope TEXT PRIMARY KEY,value TEXT,checked REAL);
@@ -130,9 +133,12 @@ class Store:
     def commit_item(self, item, reason=None, notify=True):
         self.set_item_metadata(item)
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            existed=db.execute('SELECT 1 FROM items WHERE id=?',(item['id'],)).fetchone()
             db.execute('INSERT OR REPLACE INTO items VALUES(?,?,?,?,?)', tuple(item[k] for k in ('id','version','title','body','source')))
-            db.execute('DELETE FROM chunk_fingerprints WHERE item_id=?',(item['id'],))
-            db.execute('DELETE FROM chunks WHERE item_id=?', (item['id'],))
+            if existed:
+                db.execute('DELETE FROM chunk_fingerprints WHERE item_id=?',(item['id'],))
+                db.execute('DELETE FROM chunks WHERE item_id=?', (item['id'],))
             for start in range(0, max(1, len(item['body'])), 1000):
                 body=item['body'][start:start+1200]
                 chunk=db.execute('INSERT INTO chunks VALUES(?,?,?)', (item['id'], item['title'],body))
