@@ -78,12 +78,12 @@ def test_research_deadline_returns_saved_failure(tmp_path,monkeypatch):
     import asyncio
     app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,chat_llm_enabled=True))
     real_wait=asyncio.wait_for
-    async def deadline(operation,timeout):return await real_wait(operation,.1 if timeout==30 else timeout)
+    async def deadline(operation,timeout):return await real_wait(operation,.1 if timeout==180 else timeout)
     async def slow_plan(*args,**kwargs):await asyncio.Event().wait()
     monkeypatch.setattr('backend.main.asyncio.wait_for',deadline)
     monkeypatch.setattr('backend.main.plan_question',slow_plan)
     with TestClient(app) as client:
         result=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':'Was sollte ich beachten?','request_id':'f'*32,'share_external':True}).json()
-        assert result['interrupted'] and '30 Sekunden' in result['answer']
+        assert result['interrupted'] and '180 Sekunden' in result['answer']
         state=client.get('/api/chat/result/'+'f'*32,headers={'Authorization':'Bearer test'}).json()
         assert state['status']=='failed' and state['result']['interrupted']

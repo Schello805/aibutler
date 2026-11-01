@@ -330,13 +330,13 @@ $('connect').onclick = async () => {
 };
 $('scan').onclick = async () => { $('scan').disabled = true; notice('Quellen werden geprüft …'); try { await api('scan',{method:'POST'}); notice('Prüfung abgeschlossen.'); await refresh(); } catch(e) { notice(e.message); } finally { $('scan').disabled = false; } };
 $('save').onclick = async () => { try { const value = JSON.parse($('context-json').value); if(value.projects.some(p=>!p.name.trim()||p.keywords.length>30||p.keywords.some(k=>k.length<2||k.length>100)))throw new Error('Bitte eine Bezeichnung und höchstens 30 Schlagwörter mit jeweils 2 bis 100 Zeichen eingeben.'); await api('context',{method:'PUT',body:JSON.stringify(value)}); contextDirty=false;notice('Kontext lokal gespeichert.'); } catch(e) { notice(e.message); } };
-// A slow search asks every 20 seconds; continuing keeps the existing request.
+// A slow search asks every 60 seconds; continuing keeps the existing request.
 let pendingSearch=null;
 function beginSearchWait(kind='chat',existingRequestId=null){
   const controller=new AbortController(),requestId=existingRequestId||crypto.randomUUID().replaceAll('-','');
   pendingSearch?.cancel();
   const search={controller,requestId,kind,timer:null,finished:false};pendingSearch=search;
-  const arm=()=>{search.timer=setTimeout(()=>{if(!search.finished&&pendingSearch===search&&!$('search-wait-dialog').open){$('search-wait-title').textContent=kind==='speech'?'Spracherkennung dauert noch':'Noch keine Antwort';$('search-wait-description').textContent=kind==='speech'?'Die Sprachaufnahme wird seit 20 Sekunden verarbeitet. Weitere 20 Sekunden warten oder abbrechen?':'Nach 20 Sekunden liegt noch keine Antwort vor. Soll ich weitersuchen oder abbrechen?';$('search-wait-dialog').showModal();}},20000);};
+  const arm=()=>{search.timer=setTimeout(()=>{if(!search.finished&&pendingSearch===search&&!$('search-wait-dialog').open){$('search-wait-title').textContent=kind==='speech'?'Spracherkennung dauert noch':'Noch keine Antwort';$('search-wait-description').textContent=kind==='speech'?'Die Sprachaufnahme wird seit 60 Sekunden verarbeitet. Weitere 60 Sekunden warten oder abbrechen?':'Nach 60 Sekunden liegt noch keine Antwort vor. Soll ich weitersuchen oder abbrechen?';$('search-wait-dialog').showModal();}},60000);};
   search.continue=()=>{if(search.finished)return;$('search-wait-dialog').close();clearTimeout(search.timer);arm();};
   search.finish=()=>{search.finished=true;clearTimeout(search.timer);if(pendingSearch===search){pendingSearch=null;if($('search-wait-dialog').open)$('search-wait-dialog').close();}};
   search.cancel=()=>{if(search.finished)return;controller.abort();if(kind==='chat')api('chat/cancel',{method:'POST',body:JSON.stringify({request_id:requestId})}).catch(()=>{});search.finish();stopVoice();};
@@ -436,7 +436,7 @@ async function startLocalRecording(){
       release();if(!current())return;
       if(!heard||!parts.length){voiceConversation=false;voiceState('idle','Keine Sprache erkannt · bitte erneut tippen');return;}
       voiceState('transcribing');
-      const wait=beginSearchWait('speech'),controller=wait.controller,timeout=setTimeout(()=>controller.abort(),90000);voiceUpload=controller;
+      const wait=beginSearchWait('speech'),controller=wait.controller,timeout=setTimeout(()=>controller.abort(),180000);voiceUpload=controller;
       try{
         const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
         const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream'},body:audio});
@@ -468,7 +468,7 @@ async function getDeviceLocation(){
   const revision=authRevision,actor=currentUser?.id;const stillCurrent=()=>revision===authRevision&&actor===currentUser?.id;
   if(!$('use-device-location').checked)return manualLocation;
   if(!window.isSecureContext||!navigator.geolocation)throw new Error('Gerätestandort benötigt HTTPS und eine Browserfreigabe.');
-  const position=await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:false,timeout:8000,maximumAge:120000}));
+  const position=await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:false,timeout:8000,maximumAge:160000}));
   if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');
   const latitude=Math.round(position.coords.latitude*100)/100,longitude=Math.round(position.coords.longitude*100)/100,key=latitude+','+longitude;
   let location={latitude,longitude,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Berlin',label:'Ungefährer Gerätestandort'};

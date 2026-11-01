@@ -371,9 +371,9 @@ def create_app(settings=None):
             await chat_slots.acquire()
         job={'cancelled':False,'started':time.monotonic(),'progress':{'phase':'preparing','label':'Frage wird vorbereitet'}}
         async def run():
-            try:return await asyncio.wait_for(answer_chat(value,request),timeout=30)
+            try:return await asyncio.wait_for(answer_chat(value,request),timeout=180)
             except TimeoutError:
-                await asyncio.to_thread(store.fail_turn,key[0],key[1],False,'Die Bearbeitung hat das Zeitlimit von 30 Sekunden erreicht. Deine Frage bleibt gespeichert. Bitte präzisiere die Frage oder prüfe den betroffenen Dienst.')
+                await asyncio.to_thread(store.fail_turn,key[0],key[1],False,'Die Bearbeitung hat das Zeitlimit von 180 Sekunden erreicht. Deine Frage bleibt gespeichert. Bitte präzisiere die Frage oder prüfe den betroffenen Dienst.')
                 state=await asyncio.to_thread(store.turn_result,key[0],key[1])
                 return state['result'] if state and state['result'] else {'answer':'Zeitlimit erreicht. Bitte erneut versuchen.','sources':[],'interrupted':True}
             except asyncio.CancelledError:
