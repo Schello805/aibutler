@@ -63,6 +63,9 @@ def create_app(settings=None):
         task = asyncio.create_task(worker.run()) if s.worker_enabled else None
         archive_task=asyncio.create_task(worker.archive_loop()) if s.worker_enabled and s.imap_archive_enabled else None
         yield
+        jobs=[job['task'] for job in list(active_chats.values())]
+        for job in jobs:job.cancel()
+        if jobs:await asyncio.gather(*jobs,return_exceptions=True)
         for running in (task,archive_task):
             if running:
                 running.cancel()
@@ -328,10 +331,6 @@ def create_app(settings=None):
         return {'needed':bool((weather and s.weather_enabled) or (holidays and s.holidays_enabled))}
 
     chat_slots=asyncio.Semaphore(2)
-    async def chat_capacity():
-        if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
-        async with chat_slots:yield
-
     active_chats={}
     class CancelChat(BaseModel):
         request_id:str=Field(pattern=r'^[a-f0-9]{32}$')
@@ -341,6 +340,9 @@ def create_app(settings=None):
         if not re.fullmatch(r'[a-f0-9]{32}',request_id):raise HTTPException(404,'Anfrage nicht gefunden')
         result=await asyncio.to_thread(store.turn_result,user_owner(request),request_id)
         if result is None:raise HTTPException(404,'Anfrage nicht gefunden')
+        job=active_chats.get((user_owner(request),request_id))
+        if job and result['status']=='pending':
+            result['progress']={**job.get('progress',{}),'elapsed_seconds':round(time.monotonic()-job['started'],1)}
         return result
 
     @app.post('/api/chat/cancel',dependencies=protected)
@@ -351,33 +353,44 @@ def create_app(settings=None):
         await asyncio.gather(job['task'],return_exceptions=True)
         return {'cancelled':True}
 
-    @app.post('/api/chat',dependencies=[*protected,Depends(chat_capacity)])
-    async def chat(value: Chat,request:Request):
+    @app.post('/api/chat',dependencies=protected)
+    async def chat(value:Chat,request:Request):
         value=value.model_copy(update={'request_id':value.request_id or secrets.token_hex(16)})
         key=(user_owner(request),value.request_id)
         if key in active_chats:raise HTTPException(409,'Diese Frage wird bereits bearbeitet.')
-        job={'task':asyncio.create_task(answer_chat(value,request)),'cancelled':False};active_chats[key]=job
-        async def disconnect():
-            while not job['task'].done():
-                if await request.is_disconnected():
-                    job['cancelled']=True;job['task'].cancel();return
-                await asyncio.sleep(.5)
-        monitor=asyncio.create_task(disconnect())
-        try:return await job['task']
+        if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
+        await chat_slots.acquire()
+        job={'cancelled':False,'started':time.monotonic(),'progress':{'phase':'preparing','label':'Frage wird vorbereitet'}}
+        async def run():
+            try:return await answer_chat(value,request)
+            except asyncio.CancelledError:
+                await asyncio.to_thread(store.fail_turn,key[0],key[1],job['cancelled'])
+                raise
+            except Exception:
+                await asyncio.to_thread(store.fail_turn,key[0],key[1])
+                raise
+            finally:
+                active_chats.pop(key,None);chat_slots.release()
+        job['task']=asyncio.create_task(run());active_chats[key]=job
+        # Observe exceptions even if the browser disconnects before the task completes.
+        job['task'].add_done_callback(lambda task:task.exception() if not task.cancelled() else None)
+        try:return await asyncio.shield(job['task'])
         except asyncio.CancelledError:
-            await asyncio.to_thread(store.fail_turn,key[0],key[1],True)
             if job['cancelled']:raise HTTPException(499,'Suche abgebrochen.')
-            raise
-        except Exception:
-            await asyncio.to_thread(store.fail_turn,key[0],key[1])
-            raise
-        finally:
-            monitor.cancel();await asyncio.gather(monitor,return_exceptions=True)
-            active_chats.pop(key,None)
+            raise  # The detached job keeps running; only an explicit cancel stops it.
 
     async def answer_chat(value:Chat,request:Request):
-        started=time.monotonic()
+        started=time.monotonic();phase_started=started;phase='preparing';timings={};source_timings={}
+        def stage(name,label):
+            nonlocal phase,phase_started
+            now=time.monotonic();timings[phase]=round(timings.get(phase,0)+now-phase_started,3)
+            phase=name;phase_started=now
+            job=active_chats.get((user_owner(request),value.request_id))
+            if job is not None:job['progress']={'phase':name,'label':label,'timings':dict(timings)}
         def timed(result):
+            stage('done','Antwort ist fertig')
+            result['timings']=dict(timings)
+            result['source_timings']=dict(source_timings)
             result.update(answered_at=datetime.now(ZoneInfo('UTC')).isoformat(),duration_seconds=round(time.monotonic()-started,3))
             return result
         owner_id=user_owner(request)
@@ -410,6 +423,7 @@ def create_app(settings=None):
         # A simple upcoming-calendar question needs neither a remote planner nor mail/RAG.
         if upcoming_calendar(value.message) and not re.search(r'e-?mail|dokument|rechnung|wetter|paket|warum|vergleich',value.message,re.I):
             zone=value.device_location.timezone if value.device_location else 'Europe/Berlin'
+            stage('calendar','Kalender wird geprüft')
             context=await worker.personal.context(value.message,zone=zone,requested=('calendar',))
             calendar=context.get('calendar')
             if not s.icloud_calendar_enabled:
@@ -443,6 +457,7 @@ def create_app(settings=None):
         history=[{'role':message['role'],'text':'[Zugangsdaten werden nicht an die KI übertragen]' if memory_sensitive(message['text']) else message['text'][:1600]} for message in (previous['messages'][-6:] if previous else [])]
         remembered=await asyncio.to_thread(memories.retrieve,owner_id,value.message)
         if is_current_lighting_question(value.message):
+            stage('smart_home','Lichter werden geprüft')
             lighting=await worker.lighting_context(value.message)
             sources=[]
             if lighting.get('fresh'):
@@ -466,6 +481,7 @@ def create_app(settings=None):
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
         interactive=bool(value.share_external and chat_enabled)
         chat_settings=s.model_copy(update={'allow_external_llm':bool(chat_enabled)})
+        stage('planning','Passende Quellen werden ausgewählt')
         plan=None
         quick=local_plan(value.message)
         if quick.intent in ('person','purchases','account','events') and len(value.message.split())<=18 and not re.search(r'\bund\b|vergleich|zusammenhang|kalender|wetter|dokument|rechnung',value.message,re.I):
@@ -481,6 +497,7 @@ def create_app(settings=None):
         selected=set(plan.sources)
         sender=(plan.sender if plan and plan.intent=='person' else None) or question_sender(value.message)
         queries=plan.queries if plan else []
+        stage('sources','Passende Quellen werden geprüft')
         personal_task=asyncio.create_task(worker.personal.context(value.message,sender or '',store.personal_identity(user_owner(request)),display_zone,selected))
         async def lookup_mail():
             if 'email' not in selected:return None
@@ -495,9 +512,16 @@ def create_app(settings=None):
             return merged
         mail_task=lookup_mail()
         tasks=[mail_task,worker.search_document_context(queries) if 'paperless' in selected else asyncio.sleep(0),worker.poll_ntfy() if 'ntfy' in selected else asyncio.sleep(0),public_data.context(value.message,value.device_location,history),personal_task]
-        source_results=await asyncio.gather(*(asyncio.wait_for(task,timeout=12 if index==4 else 10) for index,task in enumerate(tasks)),return_exceptions=True)
+        async def measured_source(task,index):
+            beginning=time.monotonic()
+            try:return await asyncio.wait_for(task,timeout=12 if index==4 else 10)
+            finally:
+                source_timings[('E-Mail','Paperless','ntfy','Wetter/Feiertage','iCloud')[index]]=round(time.monotonic()-beginning,3)
+        source_results=await asyncio.gather(*(measured_source(task,index) for index,task in enumerate(tasks)),return_exceptions=True)
         public_context=source_results[3] if isinstance(source_results[3],dict) else {'sources':[],'diagnostics':['Öffentliche Zusatzdaten konnten nicht geladen werden.']}
         personal_context=source_results[4] if isinstance(source_results[4],dict) else {'sources':[],'diagnostics':['iCloud-Zusatzdaten konnten nicht geladen werden.']}
+        source_issues=[('E-Mail','Paperless','ntfy','Wetter/Feiertage','iCloud')[index]+(': Zeitlimit erreicht' if isinstance(item,TimeoutError) else ': Abruf fehlgeschlagen') for index,item in enumerate(source_results) if isinstance(item,Exception)]
+        stage('search','Lokales Wissen wird durchsucht')
         activity_hits=store.activity_context() if outdoor_question(value.message) else []
         mail_search=source_results[0] if isinstance(source_results[0],dict) else None
         if plan:
@@ -561,6 +585,7 @@ def create_app(settings=None):
                 'fetch_error':bool(worker.status['sources'].get('iobroker',{}).get('error')),
                 'matching_count':len(smart),'states':smart[:30],
                 'note':'Letzter gespeicherter Stand, keine Echtzeitgarantie. Nutze passende Werte zur Beantwortung, gib keine rohe Datenpunktliste oder JSON aus. Fehlende Datenpunkte beweisen keine physische Abwesenheit.'}
+        stage('answer','Antwort wird formuliert')
         answer = None
         provider_issue=None
         if interactive:
@@ -651,7 +676,7 @@ def create_app(settings=None):
             answer=local
         sources.extend(personal_context.get('sources',[]))
         sources.extend(public_context.get('sources',[]))
-        result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai}
+        result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai,'source_issues':source_issues}
         for memory in remembered:
             result['sources'].append({'id':'memory:'+memory['id'],'source':'memory','title':'Gespeicherte Nutzerangabe','excerpt':memory['content']+' · Quelle: '+memory['source']+' · Quelldatum: '+str(memory.get('source_date') or '')[:10]+' · Bestätigt/geändert: '+memory['updated'][:10],'document_date':memory['updated'],'url':None})
         try:proposal=await asyncio.to_thread(memories.propose,owner_id,input_message,value.conversation_id)

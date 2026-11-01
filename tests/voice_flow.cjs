@@ -6,7 +6,7 @@ const source=app.split('// Voice lifecycle:')[1].split('// End voice lifecycle.'
 function harness({denied=false,pending=false,proxyFailure=false}={}){
  const elements={mic:{},'voice-stop':{},'voice-send':{checked:true},question:{dispatchEvent(){}},'text-entry':{},'chat-form':{requestSubmit(){submitted++;}}};
  let submitted=0,stopped=0,uploads=0,requests=0,time=0,interval;
- const states=[],recordings=[];let resolveMedia;
+ const states=[],recordings=[],events={};let resolveMedia;
  const stream={getTracks:()=>[{stop(){stopped++;}}]};
  const media=pending?new Promise(r=>resolveMedia=r):Promise.resolve(stream);
  class Recorder{
@@ -22,10 +22,10 @@ function harness({denied=false,pending=false,proxyFailure=false}={}){
  }
  const context=vm.createContext({pendingSearch:null,beginSearchWait:()=>({controller:new AbortController(),finish(){}}),elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
   window:{isSecureContext:true,MediaRecorder:Recorder,AudioContext,speechSynthesis:{cancel(){}}},navigator:{mediaDevices:{getUserMedia(){requests++;return denied?Promise.reject(Object.assign(new Error('denied'),{name:'NotAllowedError'})):media;}}},
-  $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{addEventListener(){}},
+  $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{hidden:false,addEventListener(name,fn){events[name]=fn;}},
   fetch:async()=>{uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?'};}};}});
  vm.runInContext(decoder+'\n//'+source+'\nglobalThis.probe={start:()=>elements.mic.onclick(),stop:stopVoice,active:()=>voiceConversation};',context);
- return{context,elements,states,recordings,flush:()=>new Promise(r=>setImmediate(r)),speak(){time+=150;interval();},resolve(){resolveMedia(stream);},stats:()=>({submitted,stopped,uploads,requests})};
+ return{context,elements,states,recordings,hide(){context.document.hidden=true;events.visibilitychange();},flush:()=>new Promise(r=>setImmediate(r)),speak(){time+=150;interval();},resolve(){resolveMedia(stream);},stats:()=>({submitted,stopped,uploads,requests})};
 }
 test('Safari MP4 capture sends recognized text once and releases microphone',async()=>{
  const h=harness();h.context.probe.start();await h.flush();assert.equal(h.recordings[0].mimeType,'audio/mp4');h.speak();h.context.probe.start();await h.flush();
@@ -56,4 +56,9 @@ test('ending voice also cancels the pending transcription wait',()=>{
  const h=harness();let cancelled=0;
  h.context.pendingSearch={kind:'speech',cancel(){cancelled++;h.context.pendingSearch=null;}};
  h.context.probe.stop();assert.equal(cancelled,1);assert.equal(h.context.probe.active(),false);
+});
+test('locking the phone stops recording but preserves an accepted chat request',async()=>{
+ const h=harness();h.context.probe.start();await h.flush();let cancelled=0;
+ h.context.pendingSearch={kind:'chat',cancel(){cancelled++;}};
+ h.hide();await h.flush();assert.equal(cancelled,0);assert.equal(h.context.probe.active(),false);assert.equal(h.stats().uploads,0);assert.equal(h.stats().stopped,1);
 });

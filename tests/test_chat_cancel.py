@@ -36,3 +36,39 @@ def test_cancellation_is_owner_scoped_and_releases_chat_capacity(tmp_path,monkey
             await client.post('/api/chat/cancel',json={'request_id':body['request_id']},headers=headers)
             assert (await second).status_code==499
     asyncio.run(scenario())
+
+
+def test_disconnected_request_continues_and_can_be_recovered_without_resubmit(tmp_path,monkeypatch):
+    started=asyncio.Event();release=asyncio.Event()
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False,icloud_calendar_enabled=True))
+    monkeypatch.setattr(app.state.accounts,'session',lambda token:{'id':token,'role':'member','email':'test@example.invalid'} if token else None)
+    calls=[]
+    async def calendar(*args,**kwargs):
+        calls.append('calendar');started.set();await release.wait()
+        return {'calendar':{'events':[],'stale':False},'sources':[],'diagnostics':[]}
+    monkeypatch.setattr(app.state.worker.personal,'context',calendar)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://127.0.0.1') as client:
+            headers={'cookie':'butler_session=a','origin':'http://127.0.0.1'}
+            body={'message':'Meine nächsten Termine?','request_id':'e'*32}
+            request=asyncio.create_task(client.post('/api/chat',json=body,headers=headers))
+            await asyncio.wait_for(started.wait(),2)
+            request.cancel()
+            try:await request
+            except asyncio.CancelledError:pass
+            state=(await client.get('/api/chat/result/'+'e'*32,headers=headers)).json()
+            assert state['status']=='pending' and state['progress']['phase']=='calendar'
+            assert state['conversation_id']
+            assert (await client.get('/api/chat/result/'+'e'*32,headers={**headers,'cookie':'butler_session=b'})).status_code==404
+            assert (await client.post('/api/chat',json=body,headers=headers)).status_code==409
+            release.set()
+            for _ in range(100):
+                state=(await client.get('/api/chat/result/'+'e'*32,headers=headers)).json()
+                if state['status']=='done':break
+                await asyncio.sleep(.01)
+            assert state['status']=='done'
+            assert state['result']['timings']['calendar']>=0
+            assert calls==['calendar']
+            conversation=app.state.store.conversation(state['conversation_id'],'a')
+            assert len(conversation['messages'])==2
+    asyncio.run(scenario())

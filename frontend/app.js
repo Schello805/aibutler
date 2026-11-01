@@ -24,9 +24,11 @@ function voiceState(state,message){
 function setMic(active){if(!active)voiceState('idle');}
 function answerBubble(result){
   const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
-  const answer=bubble(text,'assistant',result.answered_at||result.created);
+  const answer=bubble(text,'assistant',result.answered_at||result.created);if(result.request_id)answer.dataset.requestId=result.request_id;
   if(Number.isFinite(result.duration_seconds)&&result.duration_seconds>=0&&!result.pending){const duration=node('span','message-duration',' · '+result.duration_seconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s');duration.title='Bearbeitungsdauer auf dem Butler-Server';answer.querySelector('.message-meta').append(duration);}
   answer.querySelector('.message-role').textContent=result.pending?'BUTLER · WIRD BEARBEITET':result.interrupted?'BUTLER · UNTERBROCHEN':result.answer_mode==='live'?'BUTLER · LIVE-ABFRAGE':result.external_used?'BUTLER · KI-ANTWORT':'BUTLER · LOKALE ANTWORT';
+  if(result.timings){const detail=node('details','answer-timings');detail.append(node('summary','','Zeitdetails'));const names={preparing:'Vorbereitung',calendar:'Kalender',smart_home:'Smart Home',planning:'Quellenauswahl',sources:'Quellenabrufe (parallel)',search:'Lokale Suche',answer:'Antwort formulieren'};for(const [key,seconds] of Object.entries(result.timings)){if(key==='done')continue;detail.append(node('div','',(names[key]||key)+': '+Number(seconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s'));}for(const [key,seconds] of Object.entries(result.source_timings||{}))detail.append(node('div','source-timing',key+': '+Number(seconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s (parallel)'));answer.append(detail);}
+  if(result.source_issues?.length)answer.append(node('small','answer-status',result.source_issues.join(' · ')+'. Vorhandene lokale Daten wurden berücksichtigt.'));
   if(result.ai_issue){const status=node('small','answer-status',result.ai_issue.includes('429')?'KI-Anfragelimit erreicht · lokale Antwort':'KI-Auswertung nicht verfügbar · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
   if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
   if(result.clarification==='location'){
@@ -47,7 +49,7 @@ async function loadConversations(){
 }
 async function openConversation(id){
   if(chatBusy)return;const actor=currentUser?.id,revision=authRevision,turn=++conversationRevision;if(!actor)return;
-  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor||revision!==authRevision||turn!==conversationRevision||chatBusy)return;stopVoice();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user',message.created);else answerBubble({...message.payload,answer:message.text,created:message.created});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';await loadConversations();}
+  try{const conversation=await api('conversations/'+encodeURIComponent(id));if(currentUser?.id!==actor||revision!==authRevision||turn!==conversationRevision||chatBusy)return;stopVoice();conversationId=id;localStorage.setItem(conversationKey(),id);$('messages').replaceChildren();for(const message of conversation.messages){if(message.role==='user')bubble(message.text,'user',message.created);else answerBubble({...message.payload,answer:message.text,created:message.created});}if(!conversation.messages.length)welcome();$('history-dialog').close();location.hash='chat';resumeConversationTurn(conversation);await loadConversations();}
   catch(e){notice(e.message);}
 }
 function newConversation(){
@@ -148,7 +150,7 @@ async function api(path, options = {}) {
   const revision=authRevision;
   const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
   if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.');
-  return readApiResponse(response);
+  return readApiResponse(response).catch(error=>{error.status=response.status;throw error;});
 }
 const notice = text => { $('notice').textContent=text;$('notice').hidden=!text; };
 function renderContext(){
@@ -280,7 +282,7 @@ async function restoreLogin(){
   if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
   $('preferred-name').value=currentUser.preferred_name||'';document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
-  connected=true;if(!$('messages').children.length)welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
+  connected=true;if(!$('messages').children.length||$('messages').querySelector('.welcome'))welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
   // Resume the chat without waiting for settings, counters or account administration.
   const remembered=localStorage.getItem(conversationKey());
   if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))openConversation(remembered).catch(()=>{});
@@ -322,8 +324,8 @@ $('scan').onclick = async () => { $('scan').disabled = true; notice('Quellen wer
 $('save').onclick = async () => { try { const value = JSON.parse($('context-json').value); if(value.projects.some(p=>!p.name.trim()||p.keywords.length>30||p.keywords.some(k=>k.length<2||k.length>100)))throw new Error('Bitte eine Bezeichnung und höchstens 30 Schlagwörter mit jeweils 2 bis 100 Zeichen eingeben.'); await api('context',{method:'PUT',body:JSON.stringify(value)}); contextDirty=false;notice('Kontext lokal gespeichert.'); } catch(e) { notice(e.message); } };
 // A slow search asks every 20 seconds; continuing keeps the existing request.
 let pendingSearch=null;
-function beginSearchWait(kind='chat'){
-  const controller=new AbortController(),requestId=crypto.randomUUID().replaceAll('-','');
+function beginSearchWait(kind='chat',existingRequestId=null){
+  const controller=new AbortController(),requestId=existingRequestId||crypto.randomUUID().replaceAll('-','');
   pendingSearch?.cancel();
   const search={controller,requestId,kind,timer:null,finished:false};pendingSearch=search;
   const arm=()=>{search.timer=setTimeout(()=>{if(!search.finished&&pendingSearch===search&&!$('search-wait-dialog').open){$('search-wait-title').textContent=kind==='speech'?'Spracherkennung dauert noch':'Noch keine Antwort';$('search-wait-description').textContent=kind==='speech'?'Die Sprachaufnahme wird seit 20 Sekunden verarbeitet. Weitere 20 Sekunden warten oder abbrechen?':'Nach 20 Sekunden liegt noch keine Antwort vor. Soll ich weitersuchen oder abbrechen?';$('search-wait-dialog').showModal();}},20000);};
@@ -346,14 +348,27 @@ async function chatWithRecovery(search,body){
         const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},3000);
         signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();
       });
-      try{const state=await api('chat/result/'+search.requestId,{signal});if(state.status==='done'&&state.result)return state.result;}catch(error){if(signal.aborted)throw error;}
+      try{const state=await api('chat/result/'+search.requestId,{signal:AbortSignal.any([signal,AbortSignal.timeout(5000)])});search.onProgress?.(state);if(['done','failed'].includes(state.status)&&state.result)return state.result;}catch(error){if(signal.aborted||[401,403].includes(error.status))throw error;search.onConnectionIssue?.();}
     }
     throw new DOMException('Aborted','AbortError');
   };
-  try{return await Promise.race([api('chat',{method:'POST',signal,body:JSON.stringify(body)}),poll()]);}
+  const waiting=poll();
+  try{if(!body)return await waiting;const submitted=api('chat',{method:'POST',signal,body:JSON.stringify(body)}).catch(error=>{if(signal.aborted||[400,401,403,404,422,429].includes(error.status))throw error;return waiting;});return await Promise.race([submitted,waiting]);}
   finally{recovery.abort();}
 }
 // End chat recovery.
+async function resumeConversationTurn(conversation){
+  const pending=conversation.messages.findLast(message=>message.role==='assistant'&&message.payload?.pending&&message.payload?.request_id);
+  if(!pending||chatBusy||!currentUser)return;
+  const actor=currentUser.id,revision=authRevision,id=conversationId;
+  const placeholder=[...$('messages').children].find(element=>element.dataset.requestId===pending.payload.request_id);if(!placeholder)return;
+  const search=beginSearchWait('chat',pending.payload.request_id);chatBusy=true;$('send').disabled=true;$('messages').setAttribute('aria-busy','true');
+  search.onConnectionIssue=()=>{if(currentUser?.id!==actor||revision!==authRevision)return;const content=placeholder?.querySelector('.bubble-content');if(content)content.textContent='Verbindung unterbrochen · ich warte auf die Rückmeldung des Butlers.';};
+  search.onProgress=state=>{if(currentUser?.id!==actor||revision!==authRevision||conversationId!==id)return;const content=placeholder?.querySelector('.bubble-content');if(content&&state.progress)content.textContent=state.progress.label+' · '+Math.round(state.progress.elapsed_seconds)+' s';};
+  try{const result=await chatWithRecovery(search,null);if(currentUser?.id!==actor||revision!==authRevision||conversationId!==id)return;placeholder?.remove();answerBubble(result);}
+  catch(error){if(currentUser?.id===actor&&revision===authRevision){const content=placeholder?.querySelector('.bubble-content');if(content)content.textContent=search.controller.signal.aborted?'Suche abgebrochen. Deine Frage bleibt gespeichert.':'Verbindung unterbrochen. Öffne das Gespräch erneut, um den Stand zu laden.';}}
+  finally{search.finish();if(currentUser?.id===actor&&revision===authRevision){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');loadConversations().catch(()=>{});}}
+}
 $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
   if(chatBusy)return;
@@ -361,6 +376,8 @@ $('chat-form').onsubmit = async event => {
   bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;if(voiceConversation)voiceState('thinking');
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
   const search=beginSearchWait();
+  search.onConnectionIssue=()=>{if(currentUser?.id===actor&&revision===authRevision)progress.textContent='Verbindung unterbrochen · ich warte auf die Rückmeldung des Butlers.';};
+  search.onProgress=state=>{if(currentUser?.id!==actor||revision!==authRevision)return;if(state.conversation_id){conversationId=state.conversation_id;localStorage.setItem(conversationKey(),conversationId);}if(state.progress)progress.textContent=state.progress.label+' · '+Math.round(state.progress.elapsed_seconds)+' s';};
   try {
     let deviceLocation=null;
     if(publicServices.weather||publicServices.holidays){const requirement=await api('chat/location-needed',{method:'POST',signal:search.controller.signal,body:JSON.stringify({message,conversation_id:conversationId})});if(requirement.needed)deviceLocation=await getDeviceLocation().catch(()=>null);}
@@ -396,7 +413,7 @@ function localGermanVoices(){
   const voices=read();if(voices.length)return Promise.resolve(voices);
   return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);speechSynthesis.removeEventListener('voiceschanged',finish);resolve(read());};const timer=setTimeout(finish,1200);speechSynthesis.addEventListener('voiceschanged',finish);});
 }
-function stopVoice(){if(pendingSearch&&(pendingSearch.kind==='speech'||voiceConversation))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
+function stopVoice(cancelChat=true){if(pendingSearch&&(pendingSearch.kind==='speech'||(voiceConversation&&cancelChat)))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
 async function startLocalRecording(){
   if(recorder||chatBusy||voiceStarting)return;
   const actor=currentUser?.id,revision=authRevision,turn=voiceEpoch;if(!actor)return;
@@ -440,7 +457,7 @@ async function startLocalRecording(){
 $('mic').onclick=()=>{if(voiceConversation){if(recorder?.state==='recording'){recorder.stop();return;}stopVoice();return;}if(chatBusy||voiceStarting)return;voiceEpoch++;voiceConversation=true;window.speechSynthesis?.cancel();startLocalRecording();};
 $('voice-stop').onclick=stopVoice;
 // End capture immediately when the app leaves the foreground; never listen invisibly.
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopVoice();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopVoice(false);});
 // End voice lifecycle.
 async function pollStatus(){
   try {if(connected)await refresh();}catch(e){if(connected)notice(e.message);}

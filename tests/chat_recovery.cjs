@@ -15,3 +15,15 @@ test('cancelling a request also clears the answer recovery timer',async()=>{
  const context=vm.createContext({AbortController,AbortSignal,DOMException,JSON,Promise,setTimeout:fn=>{timers.set(++next,fn);return next;},clearTimeout:id=>timers.delete(id),api:(_,options)=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true}))});
  vm.runInContext(code,context);const search={controller:new AbortController(),requestId:'abc'};const pending=context.chatWithRecovery(search,{});search.controller.abort();await assert.rejects(pending,{name:'AbortError'});assert.equal(timers.size,0);
 });
+test('a transient POST failure keeps polling rather than duplicating the question',async()=>{
+ const timers=new Map();let next=0;const calls=[];const progress=[];
+ const context=vm.createContext({AbortController,AbortSignal,DOMException,JSON,Promise,setTimeout:fn=>{timers.set(++next,fn);return next;},clearTimeout:id=>timers.delete(id),api:(path)=>{calls.push(path);if(path==='chat')return Promise.reject(Object.assign(new Error('Bad gateway'),{status:502}));return Promise.resolve({status:'done',result:{answer:'Saved'}});}});
+ vm.runInContext(code,context);const pending=context.chatWithRecovery({controller:new AbortController(),requestId:'test',onProgress:state=>progress.push(state.status)},{});
+ await Promise.resolve();const [id,fn]=timers.entries().next().value;timers.delete(id);fn();
+ assert.equal((await pending).answer,'Saved');assert.deepEqual(calls,['chat','chat/result/test']);assert.deepEqual(progress,['done']);assert.equal(timers.size,0);
+});
+test('resume only polls and renders a stored failure instead of waiting forever',async()=>{
+ const timers=new Map();let next=0;const calls=[];
+ const context=vm.createContext({AbortController,AbortSignal,DOMException,JSON,Promise,setTimeout:fn=>{timers.set(++next,fn);return next;},clearTimeout:id=>timers.delete(id),api:path=>{calls.push(path);return Promise.resolve({status:'failed',result:{answer:'Interrupted',interrupted:true}});}});
+ vm.runInContext(code,context);const pending=context.chatWithRecovery({controller:new AbortController(),requestId:'resume'},null);const [id,fn]=timers.entries().next().value;timers.delete(id);fn();assert.equal((await pending).interrupted,true);assert.deepEqual(calls,['chat/result/resume']);
+});

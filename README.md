@@ -523,3 +523,11 @@ Während einer laufenden Frage prüft die Webapp alle 3 Sekunden, ob die Antwort
 ### Persönliche Ansprache
 
 Unter Einstellungen → Mein Konto lässt sich ein Vorname oder Rufname hinterlegen, ändern oder leeren. Alternativ im Chat: „Nenn mich Michael“ oder „Sprich mich mit Michi an“. Die Angabe wird lokal am jeweiligen Benutzerkonto gespeichert und ist geräteübergreifend verfügbar. Sie personalisiert die Begrüßung und wird bei freigegebenen KI-Antworten als Profilangabe mitgesendet. Der Butler soll den Namen natürlich und gelegentlich verwenden, nicht in jeder Antwort. Namen werden nicht aus E-Mail-Adressen erraten.
+
+### Fortschritt, Zeitdetails und Wiederaufnahme
+
+Während einer laufenden Frage zeigt die App den aktuellen Verarbeitungsschritt und die verstrichene Zeit: Vorbereitung, Quellenauswahl, Quellenabruf, lokale Suche oder Antwortformulierung. Kalender- und Lichtfragen erhalten eigene Statusmeldungen. Die Angaben stammen vom Server; der Browser erfindet keine Prozentwerte.
+
+Unter jeder neuen Antwort lassen sich „Zeitdetails“ öffnen. Die gemessenen Phasendauern und einzelnen Quellenzeiten bleiben im kontogebundenen Verlauf gespeichert. Quellen laufen teilweise parallel: Ihre Einzelzeiten dürfen nicht zur Gesamtzeit addiert werden. Diese Messungen erfassen Wartezeiten einschließlich Netzwerk und Sperren; sie sind keine reine CPU-Messung.
+
+Ein Netzwechsel, Neuladen oder Sperren des Handys stoppt eine bereits angenommene Chatfrage nicht mehr. Die begrenzte Verarbeitung läuft auf dem Server weiter; beim Öffnen des betreffenden Gesprächs lädt die App Status und Ergebnis anhand derselben Anfrage-ID, ohne erneut KI-Kosten durch eine doppelte Frage auszulösen. Mikrofonaufnahme und Sprachausgabe werden beim Verlassen des Vordergrunds weiterhin beendet. „Abbrechen“ bleibt ausdrücklich wirksam. Wird der Butler-Dienst neu gestartet, werden offene Fragen als unterbrochen markiert; sie werden nicht automatisch erneut an den KI-Anbieter gesendet.

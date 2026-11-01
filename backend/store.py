@@ -418,7 +418,7 @@ class Store:
         with self.connect() as db:
             row=db.execute('SELECT t.status,t.conversation_id,m.payload FROM chat_turns t JOIN conversation_messages m ON m.id=t.assistant_message_id WHERE t.owner=? AND t.request_id=?',(owner_id or '',request_id)).fetchone()
             if not row:return None
-            return {'status':row['status'],'result':{**json.loads(row['payload']),'conversation_id':row['conversation_id']} if row['status']=='done' else None}
+            return {'status':row['status'],'conversation_id':row['conversation_id'],'result':{**json.loads(row['payload']),'conversation_id':row['conversation_id']} if row['status'] in ('done','failed') else None}
 
     def save_exchange(self,conversation_id,question,result,owner_id=None,request_id=None):
         conversation_id=conversation_id or uuid.uuid4().hex

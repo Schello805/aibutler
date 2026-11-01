@@ -2517,3 +2517,5 @@ body[data-view=chat] .chat-top {height:36px;min-height:36px;}
 .app-revision{display:flex;flex-direction:column;gap:2px;font:10px/1.4 ui-monospace,SFMono-Regular,monospace;color:#788775;white-space:nowrap;user-select:all}.app-revision small{font-size:8px;color:#95a18e}@media(max-width:700px){.app-header .breadcrumb>span:not(.workspace-dot){display:none}.app-header{gap:8px}.header-actions{gap:8px}.app-revision{font-size:9px}.app-revision small{font-size:8px}}
 
 .message-meta{font-size:10px;line-height:1.5;color:#7b8879;margin-top:8px;font-variant-numeric:tabular-nums}.bubble.user .message-meta{color:#6f7e68}.message-duration{white-space:nowrap}
+
+.answer-timings{margin-top:8px;color:#788775;font-size:10px;line-height:1.8}.answer-timings>summary{cursor:pointer;width:fit-content;min-height:28px;display:list-item}.answer-timings .source-timing{padding-left:12px;color:#8a9786}.chat-progress{font-variant-numeric:tabular-nums}
