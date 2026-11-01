@@ -335,6 +335,24 @@ $('search-continue').onclick=()=>pendingSearch?.continue();
 $('search-cancel').onclick=()=>pendingSearch?.cancel();
 $('search-wait-dialog').addEventListener('cancel',event=>{event.preventDefault();pendingSearch?.cancel();});
 // End search wait controls.
+// Recover a persisted answer if the original HTTP response stalls at the proxy.
+async function chatWithRecovery(search,body){
+  const recovery=new AbortController(),signal=AbortSignal.any([search.controller.signal,recovery.signal]);
+  const poll=async()=>{
+    while(!signal.aborted){
+      await new Promise((resolve,reject)=>{
+        const abort=()=>{clearTimeout(timer);reject(new DOMException('Aborted','AbortError'));};
+        const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},3000);
+        signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();
+      });
+      try{const state=await api('chat/result/'+search.requestId,{signal});if(state.status==='done'&&state.result)return state.result;}catch(error){if(signal.aborted)throw error;}
+    }
+    throw new DOMException('Aborted','AbortError');
+  };
+  try{return await Promise.race([api('chat',{method:'POST',signal,body:JSON.stringify(body)}),poll()]);}
+  finally{recovery.abort();}
+}
+// End chat recovery.
 $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
   if(chatBusy)return;
@@ -346,7 +364,7 @@ $('chat-form').onsubmit = async event => {
     let deviceLocation=null;
     if(publicServices.weather||publicServices.holidays){const requirement=await api('chat/location-needed',{method:'POST',signal:search.controller.signal,body:JSON.stringify({message,conversation_id:conversationId})});if(requirement.needed)deviceLocation=await getDeviceLocation().catch(()=>null);}
     if(currentUser?.id!==actor||revision!==authRevision)return;
-    const result = await api('chat',{method:'POST',signal:search.controller.signal,body:JSON.stringify({message,request_id:search.requestId,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId})});search.finish();
+    const result = await chatWithRecovery(search,{message,request_id:search.requestId,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId});search.finish();
     if(currentUser?.id!==actor||revision!==authRevision)return;
     progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);

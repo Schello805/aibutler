@@ -83,7 +83,7 @@ class Worker:
         identity=(settings.iobroker_url,settings.iobroker_user,settings.iobroker_token,settings.iobroker_password)
         cached=self.smart_inventory if self.smart_inventory_key==identity and time.monotonic()-self.smart_inventory_time<300 else None
         try:
-            states,inventory=await relevant_states(settings,queries,cached)
+            states,inventory=await asyncio.wait_for(relevant_states(settings,queries,cached),timeout=10)
             self.smart_inventory=inventory;self.smart_inventory_key=identity;self.smart_inventory_time=time.monotonic()
             self.store.record_smart_states(scope(settings),states,utc_now())
             return states
@@ -98,7 +98,7 @@ class Worker:
         inventory=self.smart_inventory if self.smart_inventory_key==identity and time.monotonic()-self.smart_inventory_time<300 else None
         enums=self.light_enums if self.light_enums_key==identity and time.monotonic()-self.light_enums_time<300 else None
         try:
-            result,inventory,enums=await asyncio.wait_for(read_lights(settings,question,inventory,enums),timeout=45)
+            result,inventory,enums=await asyncio.wait_for(read_lights(settings,question,inventory,enums),timeout=15)
             if inventory is not None:
                 self.smart_inventory=inventory;self.smart_inventory_key=identity;self.smart_inventory_time=time.monotonic()
             if enums is not None:

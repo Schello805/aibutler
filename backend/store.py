@@ -414,6 +414,12 @@ class Store:
             rows=list(db.execute("SELECT owner,request_id FROM chat_turns WHERE status='pending'"))
         for row in rows:self.fail_turn(row['owner'],row['request_id'])
 
+    def turn_result(self,owner_id,request_id):
+        with self.connect() as db:
+            row=db.execute('SELECT t.status,t.conversation_id,m.payload FROM chat_turns t JOIN conversation_messages m ON m.id=t.assistant_message_id WHERE t.owner=? AND t.request_id=?',(owner_id or '',request_id)).fetchone()
+            if not row:return None
+            return {'status':row['status'],'result':{**json.loads(row['payload']),'conversation_id':row['conversation_id']} if row['status']=='done' else None}
+
     def save_exchange(self,conversation_id,question,result,owner_id=None,request_id=None):
         conversation_id=conversation_id or uuid.uuid4().hex
         with self.connect() as db:

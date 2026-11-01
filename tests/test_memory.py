@@ -216,3 +216,12 @@ def test_answer_timing_survives_history_and_duplicate_request(tmp_path,monkeypat
         assert history[-1]['payload']['duration_seconds']==result['duration_seconds']
         replay=chat(client,'Merk dir: Ich bevorzuge kurze Antworten.',conversation_id=result['conversation_id'],request_id='c'*32)
         assert replay['answered_at']==result['answered_at']
+
+
+def test_recovery_result_is_scoped_to_account(tmp_path,monkeypatch):
+    app=setup(tmp_path,monkeypatch)
+    with TestClient(app,base_url='https://testserver') as client:
+        result=chat(client,'Merk dir: Ich mag kurze Antworten.',request_id='d'*32)
+        recovered=client.get('/api/chat/result/'+'d'*32,headers=headers()).json()
+        assert recovered['status']=='done' and recovered['result']['answer']==result['answer']
+        assert client.get('/api/chat/result/'+'d'*32,headers=headers('b')).status_code==404

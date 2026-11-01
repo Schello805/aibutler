@@ -513,3 +513,9 @@ Der regelmäßige iCloud-Abruf umfasst die letzten 180 Tage, heute und die näch
 „Gespräch beenden“ und der Abbruch im Wartedialog stoppen auch die zugehörige laufende Anfrage und entfernen den Wartetimer. Eine neue Anfrage ersetzt einen noch laufenden Wartedialog.
 
 Einfache Fragen wie „Was sind meine nächsten Termine?“ werden direkt über iCloud beantwortet, ohne vorherige KI-Planung, E-Mail- oder Dokumentensuche. Der Kalenderabruf wartet im Chat höchstens zwölf Sekunden; bei Problemen wird ein verfügbarer älterer Stand ausdrücklich gekennzeichnet oder der Abruffehler genannt. Ohne ausdrückliche Tagesangabe ist die Suche nicht auf heute beschränkt. Nächste Termine werden zeitlich aufsteigend angezeigt; vergangene Termine werden ausgeblendet.
+
+### Antwortgeschwindigkeit und Anzeige
+
+Kurze, eindeutig erkannte Absender-, Kauf-, Anmelde- und Ereignisfragen verwenden den lokalen Rechercheplan und benötigen damit keinen zusätzlichen KI-Planungsaufruf. Komplexere Fragen behalten die KI-Planung (maximal 5 Sekunden, danach lokaler Ersatzplan). Ergänzende Livequellen haben im allgemeinen Chat ein Abrufbudget von 10 Sekunden, iCloud 12 Sekunden; die anschließende KI-Antwort hat ein Gesamtlimit von 20 Sekunden. Das ist keine garantierte Gesamtantwortzeit: lokale Suche, Datenbank und Serverauslastung kommen hinzu. Abgebrochene Ergänzungsabrufe werden in den Suchhinweisen genannt; der lokale Bestand bleibt nutzbar.
+
+Während einer laufenden Frage prüft die Webapp alle 3 Sekunden, ob die Antwort bereits gespeichert wurde. Dadurch kann sie auch bei einer hängenden ursprünglichen HTTP-Antwort ohne Neuladen erscheinen. Der Abruf ist kontogebunden und endet bei Abschluss oder Abbruch. Es wird dabei keine weitere KI-Anfrage ausgelöst.

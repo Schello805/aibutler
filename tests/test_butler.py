@@ -566,8 +566,8 @@ def test_chat_ai_works_when_background_ai_is_off(tmp_path,monkeypatch):
     with TestClient(app) as client:
         r=client.post('/api/chat',headers={'Authorization':'Bearer test'},json={'message':'Was habe ich zuletzt gekauft?','share_external':True})
         result=r.json()
-        assert result['external_used'] and result['answer_mode']=='ai' and result['query_planned_by_ai']
-        assert called==['plan','answer']
+        assert result['external_used'] and result['answer_mode']=='ai' and not result['query_planned_by_ai']
+        assert called==['answer']
         assert not s.allow_external_llm
         status=client.get('/api/status',headers={'Authorization':'Bearer test'}).json()
         assert status['external_llm'] is True
