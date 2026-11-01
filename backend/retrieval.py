@@ -74,10 +74,16 @@ def is_purchase_question(question):
     return bool(re.search(r'gekauft|bestellt|letzte[nrs]?\s+(?:kauf|bestellung|einkauf)|neueste[nrs]?\s+(?:kauf|bestellung)',question,re.I))
 
 
+def purchase_evidence(hit):
+    title=hit['title']
+    if re.search(r'newsletter|rabatt|storniert|stornierung|retoure|versandt|versendet|versandbestätigung',title,re.I):return False
+    return bool(re.search(r'bestellt|bestellbestätigung|bestellung bestätigt|order confirmation|kaufbeleg|kassenbon|quittung',title,re.I) or re.search(r'bestellnummer|vielen dank für (?:deine|ihre) bestellung',message_text(hit['body']),re.I))
+
+
 def purchase_answer(hits):
     if not hits:
         return 'Ich finde gerade keinen passenden Kaufbeleg.'
-    hit=hits[0];body=hit['body']
+    hit=hits[0];body=message_text(hit['body'])
     products=re.findall(r'(?m)^\s*\*\s+([^\n]+)',body)
     if products:
         names=[]
@@ -89,7 +95,10 @@ def purchase_answer(hits):
     else:
         items=re.sub(r'(?i)^(?:bestellt|bestellbestätigung|ihre bestellung)\s*:?\s*','',hit['title']).strip(' „“')
     total=re.search(r'(?i)(?:summe|gesamtbetrag|gesamt)[\s:]*([\d.,]+)\s*(?:EUR|€)',body)
-    cost=(' für insgesamt '+total[1].replace('.',',')+' €') if total else ''
+    amount=total[1] if total else ''
+    if amount and ',' not in amount and re.search(r'\.\d{2}$',amount):amount=amount[:-3]+','+amount[-2:]
+    elif re.fullmatch(r'\d{1,3}(?:,\d{3})+\.\d{2}',amount):amount=amount.replace(',','').replace('.',',')
+    cost=(' für insgesamt '+amount+' €') if total else ''
     return 'Zuletzt hast du '+items+cost+' bestellt.'
 
 
@@ -107,7 +116,7 @@ def question_sender(question):
 def sender_answer(name,hits):
     if not hits:
         return f'Ich finde gerade keine Nachricht von {name} im eingerichteten Postfach.'
-    body=hits[0]['body']
+    body=message_text(hits[0]['body'])
     # Avoid treating quoted earlier correspondence as the sender's newest request.
     body=re.split(r'(?im)^\s*(?:Am .{8,100}schrieb|On .{8,100}wrote|Von:|From:|-----Original|>{1,})',body)[0]
     lines=[line.strip() for line in body.splitlines() if line.strip() and not line.strip().startswith(('http://','https://'))]
@@ -169,7 +178,21 @@ def local_answer(question, hits, unavailable):
     return 'Ich habe passende Unterlagen gefunden. Für eine inhaltliche Antwort kannst du die KI-Auswertung einschalten.'
 
 
+def evidence_excerpt(body,query,matched=''):
+    text=message_text(body)
+    if len(text)<=10000:return text
+    position=text.find(message_text(matched).strip()[:100]) if matched else 0
+    if re.search(r'wartung|service|gewartet',query,re.I):
+        execution=re.search(r'leistungsdatum|ausführungstermin|ausgeführt|durchgeführt|wartungsarbeiten',text,re.I)
+        if execution:position=execution.start()
+    if position<2000:return text[:10000]
+    start=max(2000,position-2000)
+    return text[:2000]+'\n[… weiterer Dokumentauszug …]\n'+text[start:start+7900]
+
+
 def relevant_evidence(question,title,body):
+    if re.search(r'paket|lieferung|zustell|geklingelt|klingel',question,re.I) and re.search(r'newsletter|rabatt|sonderangebot|stellenangebot',title,re.I):
+        return False
     if not re.search(r'wartung|gewartet',question,re.I):
         return True
     if re.search(r'newsletter|\bjobs?\b|stellenangebot|sucht.{0,50}(meister|techniker|consultant)|karriere',title,re.I):
@@ -188,9 +211,13 @@ def maintenance_facts(hit):
     if not re.search(r'wartung|gewartet',body+' '+title,re.I):
         return facts
     completed=bool(re.search(r'geleistet|durchgeführt|ausgeführt|wartungsarbeiten\s+vom|wartungsprotokoll|servicebericht',body+' '+title,re.I))
+    cancelled=bool(re.search(r'stornierung|storniert|abgesagt',title,re.I))
+    if cancelled:return facts
     if completed:
         pattern=r'(?:wartungscheckliste|wartungsarbeiten|wartung|gewartet|leistungsdatum|ausführungstermin|ausgeführt|durchgeführt)[^\d\n]{0,55}(\d{1,2})[./](\d{1,2})[./](\d{4})'
         for match in re.finditer(pattern,body,re.I):
+            context=body[max(0,match.start()-30):match.end()+40]
+            if re.search(r'nicht.{0,20}(?:durchgeführt|ausgeführt)|geplant|voraussichtlich|vorgesehen',context,re.I):continue
             try:
                 day=datetime(int(match[3]),int(match[2]),int(match[1]))
                 if day.date()<=datetime.now().date():

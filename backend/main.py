@@ -19,10 +19,10 @@ from .store import Store
 from .accounts import Accounts
 from .worker import Worker
 from .intelligence import generate, ProviderLimited, provider_is_limited
-from .planning import plan_question
+from .planning import plan_question,complete_plan
 from .smarthome import scope
 from .lighting import is_current_lighting_question, light_answer
-from .retrieval import local_answer, maintenance_answer, evidence_recency, question_sender, is_purchase_question, is_account_question
+from .retrieval import relevant_evidence,purchase_evidence,local_answer, maintenance_answer, evidence_recency, question_sender, is_purchase_question, is_account_question
 import json
 import re
 
@@ -280,7 +280,9 @@ def create_app(settings=None):
                 plan=await plan_question(chat_settings,planning_question)
             except Exception:
                 pass  # Keep data retrieval available; mark a failed answer explicitly below.
-        selected=set(plan.sources) if plan else {'email','paperless'}
+        planned_by_ai=plan is not None
+        plan=complete_plan(plan,value.message)
+        selected=set(plan.sources)
         sender=(plan.sender if plan and plan.intent=='person' else None) or question_sender(value.message)
         queries=plan.queries if plan else []
         async def skip_mail():return None
@@ -299,21 +301,23 @@ def create_app(settings=None):
                 hits=[];seen=set()
                 for query in plan.queries or [value.message]:
                     allowed=[{'email':'imap','paperless':'paperless','ntfy':'ntfy'}.get(source,source) for source in selected if source!='smart_home']
-                    candidates=store.search(query,source_filter=allowed)
-                    if not candidates:candidates=store.search(query,strict=False,source_filter=allowed)
+                    candidates=store.search(query,source_filter=allowed,recent=plan.recent)
+                    if not candidates:candidates=store.search(query,strict=False,source_filter=allowed,recent=plan.recent)
                     for hit in candidates:
                         if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.append(hit)
                 if plan.recent:hits.sort(key=evidence_recency,reverse=True)
-                hits=hits[:6]
+                # Preserve candidates until relevance filtering and source balancing below.
         else:
             hits = store.sender_messages(sender) if sender else store.recent_purchases() if is_purchase_question(value.message) else store.recent_account_activity() if is_account_question(value.message) else store.search(value.message)
         # Intent-specific helpers provide candidates; additional planned sources remain searchable.
         if plan:
             seen={hit['item_id'] for hit in hits}
             extra_allowed=[{'email':'imap','paperless':'paperless','ntfy':'ntfy'}.get(source,source) for source in selected if source!='smart_home']
+            if plan.intent=='person':extra_allowed=[source for source in extra_allowed if source!='imap']
             for query in plan.queries:
-                for hit in store.search(query,strict=False,source_filter=extra_allowed):
+                for hit in store.search(query,strict=False,source_filter=extra_allowed,recent=plan.recent):
                     if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.append(hit)
+            hits=[hit for hit in hits if relevant_evidence(value.message,hit['title'],hit['body']) and (plan.intent!='purchases' or purchase_evidence(hit))]
             # Reserve at least one matching result from each requested source.
             groups={}
             for hit in hits:groups.setdefault(hit.get('source','local'),[]).append(hit)
@@ -345,7 +349,7 @@ def create_app(settings=None):
         provider_issue=None
         if interactive:
             try:
-                answer = await generate(chat_settings,'Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'conversation':history,'current_date':datetime.now(ZoneInfo('Europe/Berlin')).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':'Europe/Berlin','current_time':datetime.now(ZoneInfo('Europe/Berlin')).isoformat()})
+                answer = await generate(chat_settings,'Beantworte persönliche Fragen ausschließlich anhand der bereitgestellten Quellen, Zustände und Gesprächsnachrichten. Fehlt ein passender Beleg, sage knapp, dass du es nicht weißt; erfinde keine persönlichen Tatsachen. Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Für zuletzt zählt das belegte Ereignis- oder Leistungsdatum, nicht automatisch das Rechnungs- oder Importdatum. Eine Bestätigung zur Registrierung ist von einer Anmeldung und ein angeforderter Login-Code von einem abgeschlossenen Login zu unterscheiden. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'conversation':history,'current_date':datetime.now(ZoneInfo('Europe/Berlin')).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':'Europe/Berlin','current_time':datetime.now(ZoneInfo('Europe/Berlin')).isoformat()})
             except ProviderLimited:
                 provider_issue='Der KI-Anbieter begrenzt gerade Anfragen (HTTP 429). Die Antwort wurde aus lokalen Belegen erstellt.'
             except Exception:
@@ -392,7 +396,7 @@ def create_app(settings=None):
         # A precise locally extracted execution date/period remains available without cloud access.
         if not answer:
             answer=local
-        result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':plan is not None}
+        result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai}
         result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)
         return result
     speech_lock=asyncio.Lock()

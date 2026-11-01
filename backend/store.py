@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import uuid
-from .retrieval import query_terms, relevant_evidence, evidence_recency, account_activity_kind, message_text
+from .retrieval import query_terms, evidence_excerpt,relevant_evidence, evidence_recency, account_activity_kind, message_text
 from pathlib import Path
 
 class Store:
@@ -110,7 +110,7 @@ class Store:
         with self.connect() as db:
             return {r[0] for r in db.execute("SELECT id FROM items WHERE source='imap'")}
 
-    def search(self, query, exclude='', strict=True, source_filter=None):
+    def search(self, query, exclude='', strict=True, source_filter=None,recent=False):
         terms=query_terms(query)
         if not terms:
             return []
@@ -123,7 +123,8 @@ class Store:
             groups=[]
             for source in sources:
                 if source_filter is not None and source not in source_filter:continue
-                sql='SELECT c.item_id,c.title,c.body,i.source FROM chunks c JOIN items i ON i.id=c.item_id WHERE chunks MATCH ? AND c.item_id != ? AND i.source=?'+conditions+' ORDER BY rank'
+                ordering='(SELECT document_date FROM item_metadata WHERE item_id=c.item_id) DESC,rank' if recent else 'rank'
+                sql='SELECT c.item_id,c.title,c.body,i.source FROM chunks c JOIN items i ON i.id=c.item_id WHERE chunks MATCH ? AND c.item_id != ? AND i.source=?'+conditions+' ORDER BY '+ordering
                 params=[expression,exclude,source]+(terms if strict else [])
                 hits,seen=[],set()
                 for row in db.execute(sql,params):
@@ -131,9 +132,9 @@ class Store:
                         continue
                     seen.add(row['item_id'])
                     full=db.execute('SELECT body FROM items WHERE id=?',(row['item_id'],)).fetchone()[0]
-                    if strict and not relevant_evidence(query,row['title'],full):
+                    if not relevant_evidence(query,row['title'],full):
                         continue
-                    hit=dict(row);hit['body']=(message_text(full) if source=='imap' else full)[:10000]
+                    hit=dict(row);hit['body']=evidence_excerpt(full,query,row['body'])
                     meta=db.execute('SELECT document_date,filename FROM item_metadata WHERE item_id=?',(row['item_id'],)).fetchone()
                     if meta:
                         hit.update(dict(meta))
@@ -141,7 +142,7 @@ class Store:
                     if len(hits)==50:
                         break
                 if hits:
-                    if source=='ntfy' or (strict and re.search(r'wartung|gewartet',query,re.I)):
+                    if recent or source=='ntfy' or (strict and re.search(r'wartung|gewartet',query,re.I)):
                         hits.sort(key=evidence_recency,reverse=True)
                     groups.append(hits[:5])
             # Round-robin keeps relevant mail and Paperless evidence together.

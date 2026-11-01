@@ -35,3 +35,43 @@ Wähle person für Nachrichten/Anliegen einer Person, purchases für Käufe/Best
     plan=RetrievalPlan.model_validate_json(text)
     if any(len(query)>200 for query in plan.queries):raise ValueError('Suchanfrage zu lang')
     return plan
+
+
+def local_plan(question):
+    """Keep relevant service lookups working when semantic planning is unavailable."""
+    import re
+    from .retrieval import question_sender,is_purchase_question,is_account_question,STOPWORDS
+    sender=question_sender(question)
+    recent=bool(re.search(r'zuletzt|letzte|neueste|aktuell|gerade|schon|wann',question,re.I))
+    if sender:
+        return RetrievalPlan(intent='person',sender=sender,queries=[sender],sources=['email'],recent=True)
+    if is_purchase_question(question):
+        return RetrievalPlan(intent='purchases',queries=['Bestellbestätigung','Bestellt','Kaufbeleg'],recent=True)
+    if is_account_question(question):
+        return RetrievalPlan(intent='account',queries=['Anmeldung','Registrierung','Login'],sources=['email'],recent=True)
+    if re.search(r'paket|lieferung|zustell|sendung',question,re.I):
+        words=[word for word in re.findall(r'[\w-]{3,}',question) if word.lower() not in STOPWORDS and word.lower() not in {'paket','lieferung','sendung','angekommen'}]
+        return RetrievalPlan(intent='events',queries=[' '.join(['Paket',*words[:4]])[:200],'Zustellung','Klingel'],sources=['email','ntfy'],recent=True)
+    if re.search(r'geklingelt|klingel|türklingel|tuerklingel',question,re.I):
+        return RetrievalPlan(intent='events',queries=['Klingel','Türklingel'],sources=['ntfy'],recent=True)
+    if re.search(r'wartung|gewartet',question,re.I) and re.search(r'heiz|therme|pellet|solarfocus|solar\s+focus|wärmepumpe',question,re.I):
+        return RetrievalPlan(queries=['Heizung Wartung','Solarfocus Service','Pelletkessel Wartung'],recent=True)
+    return RetrievalPlan(queries=[question[:200]],recent=recent)
+
+
+def complete_plan(plan,question):
+    fallback=local_plan(question)
+    if plan is None:return fallback
+    plan=plan.model_copy(deep=True)
+    if not plan.sources:plan.sources=fallback.sources
+    if not plan.queries:plan.queries=fallback.queries
+    # A package question needs timestamped events as well as shipping mail.
+    if fallback.intent=='events':
+        plan.sources=list(dict.fromkeys([*plan.sources,*fallback.sources]))
+        plan.queries=list(dict.fromkeys([*plan.queries,*fallback.queries]))[:3]
+    if fallback.intent=='events' and 'ntfy' in fallback.sources:
+        import re
+        if not any(re.search(r'klingel|türklingel',query,re.I) for query in plan.queries):
+            plan.queries=plan.queries[:2]+['Klingel']
+    plan.recent=plan.recent or fallback.recent
+    return plan

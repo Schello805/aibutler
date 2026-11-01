@@ -193,6 +193,8 @@ Fragen wie **„Welche Lichter sind gerade noch an?“** lesen Schalt- und Dimmz
 
 Während der erstmaligen Indexierung erscheint auch im Chat eine dezente Statusanzeige mit schmalen Balken für E-Mails, Paperless-Dokumente und ntfy-Verlauf. Bekannte Mengen werden als „erfasst / gesamt“ angezeigt; während der Bestandsaufnahme bleibt der Balken unbestimmt. Die Anzeige aktualisiert sich alle fünf Sekunden, zeigt Unterbrechungen oder pausierte Importe und verschwindet nach Abschluss automatisch. ioBroker liefert aktuelle Zustände bei passenden Fragen und hat keinen vollständigen rückwirkenden Datenbestand.
 
+Typische Recherchefälle und ihre Grenzen sind in [ANSWER_QUALITY.md](ANSWER_QUALITY.md) dokumentiert. Fällt die KI-Suchplanung aus, bleiben passende E-Mail-, Paperless- und ntfy-Abfragen über einen lokalen Rechercheplan verfügbar. Das schaltet keine externe KI-Freigabe ein.
+
 **Wissensquellen** zeigt Mengen und Importfortschritt. Ein großer Mailbestand wird schrittweise und fortsetzbar eingelesen. Das ist kein sofort abgeschlossener Gesamtabruf. Rechnungen, alte E-Mails und bereits importierte Ereignisse sind anschließend lokal durchsuchbar. Zusätzliche passende Quellen werden bei Chatfragen lesend nachgeladen.
 
 ## 6. Später aktualisieren – ein Befehl
