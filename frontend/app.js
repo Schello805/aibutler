@@ -16,7 +16,7 @@ const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/
 const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
 function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true));if(currentUser?.preferred_name)$('messages').querySelector('h1').textContent='Hallo '+currentUser.preferred_name+'. Was möchtest du wissen?'; }
 function voiceState(state,message){
-  const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','Sprechpause oder erneut tippen zum Senden'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
+  const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','3,5 Sekunden Sprechpause oder erneut tippen zum Senden'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
   $('mic').dataset.state=state;$('mic').classList.toggle('recording',state==='recording');$('mic').setAttribute('aria-pressed',String(state!=='idle'));$('mic').setAttribute('aria-label',state==='recording'?'Frage jetzt senden':state==='idle'?'Sprachgespräch starten':'Sprachgespräch beenden');
   $('mic').replaceChildren(state==='recording'?node('span','','■'):iconNode('mic'));
   $('voice-label').textContent=message||labels[state][0];$('voice-hint').textContent=labels[state][1];$('voice-stop').hidden=state==='idle';
@@ -30,7 +30,7 @@ function answerBubble(result){
   if(Number.isFinite(result.first_token_seconds))answer.querySelector('.message-meta').append(node('span','message-duration',' · Modelltext nach '+result.first_token_seconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'));
   if(result.timings){const detail=node('details','answer-timings');detail.append(node('summary','','Zeitdetails'));const names={preparing:'Vorbereitung',calendar:'Kalender',smart_home:'Smart Home',planning:'Quellenauswahl',sources:'Quellenabrufe (parallel)',search:'Lokale Suche',answer:'Antwort formulieren'};for(const [key,seconds] of Object.entries(result.timings)){if(key==='done')continue;detail.append(node('div','',(names[key]||key)+': '+Number(seconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s'));}for(const [key,seconds] of Object.entries(result.source_timings||{}))detail.append(node('div','source-timing',key+': '+Number(seconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s (parallel)'));answer.append(detail);}
   if(result.source_issues?.length)answer.append(node('small','answer-status',result.source_issues.join(' · ')+'. Vorhandene lokale Daten wurden berücksichtigt.'));
-  if(result.ai_issue){const status=node('small','answer-status',result.ai_issue.includes('429')?'KI-Anfragelimit erreicht · lokale Antwort':'KI-Auswertung nicht verfügbar · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
+  if(result.ai_issue){const status=node('small','answer-status',result.ai_issue+' · lokale Antwort');status.title=result.ai_issue;answer.append(status);}
   if(result.sources?.length||result.diagnostics?.length){const evidence=node('button','evidence-link',result.sources?.length?'Belege ansehen · '+result.sources.length:'Hinweise zur Suche');evidence.type='button';evidence.append(iconNode('arrow'));evidence.onclick=()=>showEvidence(result.sources||[],result.diagnostics||[]);answer.append(evidence);}
   if(result.clarification==='location'){
     const choose=node('button','evidence-link','Ort angeben');choose.type='button';choose.onclick=()=>{$('location-dialog').showModal();};answer.append(choose);
@@ -427,14 +427,14 @@ async function startLocalRecording(){
     context=new (window.AudioContext||window.webkitAudioContext)();
     let resumeTimer;try{await Promise.race([context.resume(),new Promise((_,reject)=>{resumeTimer=setTimeout(()=>reject(new Error('Mikrofon bitte erneut antippen, um Audio zu aktivieren.')),5000);})]);}finally{clearTimeout(resumeTimer);}
     const status=await api('speech');if(!current())return;if(!status.ready)throw new Error('Lokale Spracherkennung ist noch nicht eingerichtet.');
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});if(!current())return;
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});if(!current())return;
     const source=context.createMediaStreamSource(stream),analyser=context.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
     const samples=new Float32Array(analyser.fftSize),parts=[];
     const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
     recording=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);recorder=recording;
     let heard=false,lastVoice=performance.now();const started=lastVoice;
     const finish=()=>{if(recording.state==='recording')recording.stop();};
-    timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.015){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>1800)||(!heard&&performance.now()-started>12000)||performance.now()-started>45000)finish();},150);
+    timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.008){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>3500)||(!heard&&performance.now()-started>12000)||performance.now()-started>59000)finish();},150);
     recording.ondataavailable=event=>{if(event.data.size)parts.push(event.data);};
     recording.onerror=()=>{release();if(current()){voiceConversation=false;voiceState('idle','Aufnahme fehlgeschlagen · bitte erneut versuchen');}};
     recording.onstop=async()=>{

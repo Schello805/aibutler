@@ -595,3 +595,11 @@ In der Antwort steht zusätzlich **Modelltext nach … s**: serverseitig gemesse
 Bei Nginx/Nginx Proxy Manager muss SSE ohne Antwortpufferung durchgereicht werden. Die App setzt `X-Accel-Buffering: no`; bei eigener Location-Konfiguration gegebenenfalls `proxy_buffering off; proxy_cache off;` setzen und das Read-Timeout für längere Recherchen ausreichend wählen (z. B. `proxy_read_timeout 200s;`). Der bestehende HTTPS-/Anmeldeschutz bleibt erforderlich. Caddy behandelt `text/event-stream` als Streaming-Antwort.
 
 Anbieterreferenzen: [OpenAI Responses Streaming](https://developers.openai.com/api/docs/guides/streaming-responses), [Gemini streamGenerateContent](https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent).
+
+### Vollständigere lokale Spracheingabe und KI-Limits
+
+Die Aufnahme wartet nach erkannter Sprache 3,5 Sekunden auf weitere Wörter; erneutes Antippen sendet sofort. Leisere Sprache wird früher erkannt, automatische Mikrofon-Pegelregelung wird angefragt. Die Aufnahme bleibt auf knapp 60 Sekunden / 4 MB begrenzt. Unter „Sprache & Optionen“ lässt sich das direkte Senden abschalten, um den erkannten Text vor dem Absenden zu prüfen.
+
+`aibutler update` mit aktivierter Sprachunterstützung installiert einmalig das öffentliche mehrsprachige Whisper-**small**-Modell (ca. 500 MB). Es ersetzt für neue Aufnahmen die bisherige base-Auswahl; eine bestehende base-Installation funktioniert bis dahin weiter. Die Erkennung nutzt bis zu vier CPU-Threads und einen weniger aggressiven Sprachfilter mit Randpuffer. Das größere Modell benötigt mehr RAM und kann auf kleinen LXC-CPUs länger rechnen. Audio bleibt auf dem Butler-Rechner; der Modelldownload überträgt keine Aufnahmen. Die tatsächliche Erkennungsqualität muss mit dem verwendeten Mikrofon und realen Sätzen geprüft werden.
+
+HTTP 429 wird nicht mehr pauschal als fünfminütige Störung behandelt: `Retry-After` bestimmt bei vorübergehenden Limits die Wartezeit (ohne Header 60 Sekunden). Erkannte Guthaben-/Projekt-/Kontingentfehler werden separat und ohne rohe Anbietertexte angezeigt; dafür sind die Abrechnungseinstellungen beim Anbieter zu prüfen. Es gibt keine automatischen kostenpflichtigen Wiederholungen und keinen stillen Anbieterwechsel. Siehe [offizielle OpenAI-Fehlercodes](https://developers.openai.com/api/docs/guides/error-codes#api-errors).

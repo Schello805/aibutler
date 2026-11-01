@@ -250,8 +250,8 @@ PY
     chown aibutler:aibutler "$APP_DATA/config/.env"
     chmod 600 "$APP_DATA/config/.env"
 fi
-if $SPEECH && [[ ! -f $APP_DATA/models/whisper-base/model.bin ]]; then
-    log 'Öffentliche Sprachmodell-Gewichte laden (Audio wird nicht hochgeladen) …'
+if $SPEECH && [[ ! -f $APP_DATA/models/whisper-small/model.bin ]]; then
+    log 'Genaueres lokales Sprachmodell laden (Whisper small, einmalig ca. 500 MB; Audio bleibt lokal) …'
     runuser -u aibutler -- env DATA_DIR="$APP_DATA" HF_HOME="$APP_DATA/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1 "$RELEASE/.venv/bin/python" "$RELEASE/scripts/setup_speech.py"
 fi
 if $SPEECH; then
