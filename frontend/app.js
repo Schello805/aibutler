@@ -248,7 +248,7 @@ async function refreshData() {
   $('send').disabled=chatBusy||!connected;
   if(status.llm_limited) $('connection').textContent='KI vorübergehend begrenzt · lokale Antworten';
   const opened=new Set(Array.from($('events').querySelectorAll('details[open]')).map(el=>el.dataset.eventId));
-  $('events').replaceChildren();$('count').textContent=events.length+' FUNDSTÜCKE';$('nav-count').textContent=events.length;
+  $('events').replaceChildren();$('count').textContent=events.length+' HINWEISE';$('nav-count').textContent=events.length;
   if(!events.length) $('events').textContent='Noch keine relevanten Vorgänge gefunden. Dein Butler behält die verbundenen Quellen im Blick.';
   for(const item of events) {
     const el=document.createElement('details');el.className='event';el.dataset.eventId=String(item.id);el.open=opened.has(String(item.id));
@@ -700,15 +700,13 @@ $('cfg-llm_provider').addEventListener('change',()=>{
 
 const viewLabels={
   chat:['Gespräch','Deine Fragen. Dein Wissen.','Dein persönlicher Wissensraum.'],
-  sources:['Wissensquellen','Dein Wissen. Verbunden.','Die Grundlage für Antworten, die zu dir passen.'],
-  knowledge:['Mein Wissen','Was dein Butler sich merkt.','Deine bestätigten Angaben, Vorlieben und Vorhaben.'],
-  findings:['Fundstücke','Für dich gefunden.','Relevante Hinweise aus deinen E-Mails und Dokumenten.'],
+  knowledge:['Wissen','Dein Wissen. An einem Ort.','Quellen, Hinweise und Erinnerungen – alles im Überblick.'],
   settings:['Einstellungen','Dein Butler. Deine Verbindungen.','Verwalte deine Dienste und erzähle deinem Butler, was dir wichtig ist.']
 };
 function showView() {
   const hash=window.location.hash.slice(1);
   if(hash==='new-chat'){newConversation();return;}
-  const view=hash==='knowledge'?'knowledge':hash==='sources'?'sources':hash==='findings'?'findings':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
+  const view=['knowledge','sources','findings','memories'].includes(hash)?'knowledge':(hash==='settings'||hash==='setup'||hash==='context'||hash.startsWith('service-'))?'settings':'chat';
   for(const element of document.querySelectorAll('.page-view')) element.hidden=element.dataset.view!==view;
   for(const link of document.querySelectorAll('[data-nav]')) {
     if(link.dataset.nav===view) link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
@@ -718,8 +716,10 @@ function showView() {
   for(const tab of document.querySelectorAll('[data-settings-tab]')) tab.setAttribute('aria-selected',String(tab.dataset.settingsTab===(context?'context':'connections')));
   const [label,title,subtitle]=viewLabels[view];$('page-label').textContent=label;$('page-title').textContent=title;$('page-subtitle').textContent=subtitle;
   if(view==='knowledge')window.ButlerMemory?.load();
-  document.title='Butler · '+{knowledge:'Mein Wissen',chat:'Gespräch',sources:'Wissensquellen',findings:'Fundstücke',settings:'Einstellungen'}[view];
+  document.title='Butler · '+{knowledge:'Wissen',chat:'Gespräch',settings:'Einstellungen'}[view];
   window.scrollTo({top:0,behavior:'instant'});
+  const knowledgeTarget={sources:'sources-view',findings:'findings-view',memories:'memories-view'}[hash];
+  if(knowledgeTarget){$(knowledgeTarget).open=true;requestAnimationFrame(()=>$(knowledgeTarget).scrollIntoView({block:'start',behavior:'auto'}));}
   if(hash.startsWith('service-'))requestAnimationFrame(()=>$(hash)?.scrollIntoView({block:'start',behavior:'auto'}));
 }
 window.addEventListener('hashchange',showView);

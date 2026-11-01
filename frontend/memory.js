@@ -25,6 +25,7 @@ window.ButlerMemory=(()=>{
     return inputs;
   }
   function render(){
+    const overview=element('memory-overview-count');if(overview)overview.textContent=rows.filter(row=>row.status==='active').length+' gespeichert'+(rows.some(row=>row.status==='pending')?' · '+rows.filter(row=>row.status==='pending').length+' Vorschläge':'');
     const list=element('memory-list');list.replaceChildren();const filter=element('memory-filter').value;
     const selected=rows.filter(row=>filter==='all'||row.status===filter);
     if(!selected.length)list.append(make('p','memory-empty',filter==='pending'?'Keine offenen Vorschläge.':'Hier erscheinen deine Erinnerungen. Sage zum Beispiel: „Merk dir, dass ich kurze Antworten bevorzuge.“'));
@@ -80,5 +81,5 @@ window.ButlerMemory=(()=>{
   element('memory-discover').onclick=async event=>{if(edited){status('Bitte zuerst Änderungen speichern oder Entwürfe verwerfen.');return;}event.target.disabled=true;try{const result=await action('/discover');element('memory-filter').value='pending';await load();status(result.proposed+' neue Vorschläge aus bis zu 500 deiner letzten Chatnachrichten. Noch nichts automatisch übernommen.');}catch(e){status(e.message);}finally{event.target.disabled=false;}};
   element('memory-add-form').oninput=event=>markDirty(event.currentTarget);
   element('memory-add-form').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;try{const result=await action('','POST',{content:element('memory-content').value,kind:element('memory-kind').value,valid_from:element('memory-from').value||null,valid_until:element('memory-until').value||null});saved(event.target);event.target.reset();element('memory-filter').value=result.status==='pending'?'pending':'active';await load();}catch(e){status(e.message);}finally{button.disabled=false;}};
-  return {load,proposal,dirty:()=>edited,clear(){generation++;rows=[];edited=false;dirtyForms.clear();element('memory-discard').hidden=true;loading=null;element('memory-list').replaceChildren();element('memory-add-form').reset();status('');}};
+  return {load,proposal,dirty:()=>edited,clear(){generation++;rows=[];edited=false;dirtyForms.clear();element('memory-discard').hidden=true;loading=null;element('memory-list').replaceChildren();if(element('memory-overview-count'))element('memory-overview-count').textContent='—';element('memory-add-form').reset();status('');}};
 })();

@@ -2652,3 +2652,39 @@ body[data-view=chat] .voice-control:has(#mic[data-state=recording]) #voice-label
 }
 .control-dialog{width:min(94vw,760px);max-height:88dvh;overflow:auto;padding:24px;border:1px solid #dce5d7;border-radius:20px;background:#fcfdfa;color:#354333}.control-dialog::backdrop{background:#17251d66}.control-device{display:grid;grid-template-columns:1fr 1fr;gap:14px;border:1px solid #dce5d7;border-radius:12px;padding:18px;margin:18px 0}.control-device label{display:grid;gap:7px;font-size:12px}.control-device input,.control-device select{width:100%;padding:10px;border:1px solid #dce5d7;border-radius:8px;font:inherit}.control-confirmation{padding:14px;margin-top:14px;border:1px solid #d6e3cd;border-radius:12px;background:#f4f8ef}.control-confirmation>p{font-size:13px;margin:0 0 12px}.control-confirmation button{margin:0 8px 8px 0;min-height:44px}.control-confirmation .hint{margin:4px 0 0;line-height:1.6}.service-fields label:has(input[type=hidden]){display:none}@media(max-width:600px){.control-device{grid-template-columns:1fr}.control-device input,.control-device select{font-size:16px}.control-dialog{padding:18px}}
 .control-device,.control-device label,.control-device input,.control-device select{min-width:0}
+
+/* One knowledge workspace replaces three separate destinations. */
+.knowledge-overview{max-width:720px;margin:0 0 24px;color:#7a8b71;font-size:14px;line-height:1.8}
+.knowledge-section{border:1px solid #dfe7d9;border-radius:18px;background:#fff;margin-bottom:16px;scroll-margin-top:20px;overflow:hidden}
+.knowledge-section>summary{display:flex;align-items:center;gap:16px;list-style:none;padding:22px;cursor:pointer;min-height:92px}
+.knowledge-section>summary::-webkit-details-marker{display:none}
+.knowledge-section>summary::after{content:'⌄';font-size:20px;color:#84977b;margin-left:4px;transition:transform .15s}
+.knowledge-section[open]>summary::after{transform:rotate(180deg)}
+.knowledge-section[open]>summary{border-bottom:1px solid #e8eee4;background:#f8faf5}
+.knowledge-section-icon{display:grid;place-items:center;flex-shrink:0;width:42px;height:42px;border-radius:13px;background:#edf3e7;color:#718b60}
+.knowledge-section-icon .icon{width:21px;height:21px}
+.knowledge-section-title{display:grid;gap:6px;flex:1;min-width:0}
+.knowledge-section-title strong{font-size:15px;font-weight:600;color:#354632}
+.knowledge-section-title small{font-size:12px;line-height:1.5;color:#829277}
+.knowledge-section-body{padding:24px}
+.knowledge-section-body .knowledge-intro h2{font-size:23px;letter-spacing:-.5px;margin:12px 0}
+.knowledge-section-body .archive-card{margin-bottom:0}
+.knowledge-section-body .source-page-intro{margin-top:0}
+.knowledge-section .knowledge-intro .eyebrow{font-size:9px}
+@media(max-width:700px){
+ .sidebar nav{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .sidebar nav>a{font-size:10px;min-height:54px}
+ .knowledge-view{padding:12px 14px 24px}
+ .knowledge-overview{font-size:12px;margin-bottom:18px}
+ .knowledge-section>summary{padding:16px 14px;gap:11px;flex-wrap:wrap}
+ .knowledge-section-icon{width:36px;height:36px;border-radius:11px}
+ .knowledge-section-title strong{font-size:14px}
+ .knowledge-section-title small{font-size:11px}
+ .knowledge-section>summary>.badge{font-size:8px;max-width:110px;overflow-wrap:anywhere}
+ .knowledge-section-body{padding:18px 14px}
+ .knowledge-section .knowledge-intro h2{font-size:21px}
+ .knowledge-section .memory-toolbar{flex-wrap:wrap}
+ .knowledge-section .memory-toolbar select{max-width:100%}
+}
+@media(prefers-reduced-motion:reduce){.knowledge-section>summary::after{transition:none}}
+.knowledge-title{font-size:32px;font-weight:600;letter-spacing:-1px;margin:0 0 12px;color:#30412f}@media(max-width:700px){.knowledge-title{font-size:27px;margin-top:8px}}

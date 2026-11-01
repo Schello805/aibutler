@@ -629,3 +629,13 @@ Beispiele mit dem freigegebenen Namen „Rollo Wohnzimmer“:
 Ein solcher direkter Befehl erzeugt zunächst nur eine **Bestätigungskarte**, ohne KI-Aufruf und ohne Geräteschaltung. **Jetzt ausführen** sendet genau den angezeigten Einzelauftrag. **Nicht ausführen** verwirft ihn serverseitig. Keine Gruppen, Zeitpläne, automatische Aktionen, frei formulierten KI-Tool-Aufrufe oder geratenen Gerätezuordnungen. Nicht eindeutige Namen führen zu einer Rückfrage. Die Freigabe eines konkreten Auftrags läuft nach fünf Minuten oder beim Dienstneustart ab; Konfigurationsänderungen machen offene Aufträge ungültig. Vorschau/Verbindungstest schalten nichts.
 
 Die Anwendung prüft Rolle, Typ und Schreibbarkeit vor dem Auftrag, sendet einen POST an die [ioBroker-Simple-API](https://github.com/ioBroker/ioBroker.simple-api#setbulk) und liest danach den Zustand zurück. Eine Adapterbestätigung ist kein unabhängiger Nachweis einer physisch erreichten Rollo-Position. Bei ausstehender Rückmeldung wird dies ausdrücklich angezeigt. Nach einem Schreibversuch wird derselbe Auftrag niemals automatisch wiederholt; bei Zeitüberschreitung kann er bereits ausgeführt worden sein. Zur Nachvollziehbarkeit wird vor dem Schreibversuch ein lokaler Auftragseintrag in der Datenbank gespeichert. Chatkarten können nach einem Neuladen noch den früheren Vorschlag zeigen; die kurzlebige Ausführungsfreigabe wird dadurch nicht erneuert.
+
+### Ein gemeinsamer Wissensbereich
+
+Die Hauptnavigation enthält **Gespräch**, **Wissen** und **Einstellungen**. Unter **Wissen** sind die bisherigen drei Seiten als aufklappbare Abschnitte zusammengeführt:
+
+- **Verbundene Quellen:** angebundene Dienste, Indexbestände und Importfortschritt.
+- **Gefundene Hinweise:** automatisch erkannte Fundstücke aus den Quellen.
+- **Persönliche Erinnerungen:** bestätigte Angaben, Vorlieben, Vorhaben und offene Vorschläge des angemeldeten Kontos.
+
+Die Übersicht zeigt die jeweiligen Mengen; die Inhalte lassen sich unabhängig aufklappen. Bestehende Links `#sources` und `#findings` öffnen direkt den passenden Abschnitt derselben Seite; `#memories` führt zu den Erinnerungen. Kontotrennung und Speicherorte bleiben erhalten. Ein automatisch erkannter Hinweis wird dadurch nicht automatisch zu einer bestätigten Erinnerung.
