@@ -345,3 +345,17 @@ def test_no_selected_calendar_found_reports_names_safely(tmp_path,monkeypatch):
     with pytest.raises(CalendarSelectionError) as failure:asyncio.run(DAV(s,'calendar').read(s,START,END))
     message=icloud_error(failure.value,'Sammlungssuche')
     assert 'missing' in message and 'Familie' in message and 'private/path' not in message
+
+
+def test_calendar_refresh_keeps_180_days_both_directions_even_after_day_query(tmp_path,monkeypatch):
+    personal=PersonalSources(settings(tmp_path),Store(tmp_path))
+    calls=[]
+    async def read(self,settings,start,end,zone):
+        calls.append((start,end))
+        return {'records':[],'collections':[]}
+    monkeypatch.setattr(DAV,'read',read)
+    today=datetime.now(ZONE).replace(hour=0,minute=0,second=0,microsecond=0)
+    asyncio.run(personal.refresh('calendar',today,today+timedelta(days=1)))
+    assert calls[0]==(today-timedelta(days=180),today+timedelta(days=181))
+    asyncio.run(personal.refresh('calendar',today+timedelta(days=400),today+timedelta(days=401),force=True))
+    assert calls[-1][1]==today+timedelta(days=401)

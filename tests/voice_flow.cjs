@@ -20,7 +20,7 @@ function harness({denied=false,pending=false,proxyFailure=false}={}){
   createMediaStreamSource(){return{connect(){}};}
   createAnalyser(){return{fftSize:4,getFloatTimeDomainData(samples){samples.fill(.1);}};}
  }
- const context=vm.createContext({beginSearchWait:()=>({controller:new AbortController(),finish(){}}),elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
+ const context=vm.createContext({pendingSearch:null,beginSearchWait:()=>({controller:new AbortController(),finish(){}}),elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
   window:{isSecureContext:true,MediaRecorder:Recorder,AudioContext,speechSynthesis:{cancel(){}}},navigator:{mediaDevices:{getUserMedia(){requests++;return denied?Promise.reject(Object.assign(new Error('denied'),{name:'NotAllowedError'})):media;}}},
   $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{addEventListener(){}},
   fetch:async()=>{uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?'};}};}});
@@ -51,4 +51,9 @@ test('rapid cancellation/restart cannot open two permission requests',async()=>{
 
 test('HTML proxy error is reported as service failure and releases microphone',async()=>{
  const h=harness({proxyFailure:true});h.context.probe.start();await h.flush();h.speak();h.context.probe.start();await h.flush();assert.equal(h.stats().submitted,0);assert.equal(h.stats().stopped,1);assert.match(h.states.at(-1)[1],/Butler-Dienst.*HTTP 502/);assert.doesNotMatch(h.states.at(-1)[1],/Unexpected token/);
+});
+test('ending voice also cancels the pending transcription wait',()=>{
+ const h=harness();let cancelled=0;
+ h.context.pendingSearch={kind:'speech',cancel(){cancelled++;h.context.pendingSearch=null;}};
+ h.context.probe.stop();assert.equal(cancelled,1);assert.equal(h.context.probe.active(),false);
 });

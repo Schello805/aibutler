@@ -20,3 +20,8 @@ test('a completed answer removes pending question and never shows a late dialog'
 test('slow transcription gets the same choice without cancelling an unrelated chat job',()=>{
  const h=setup('speech');h.expire();assert.match(h.elements['search-wait-title'].textContent,/Spracherkennung/);h.search.cancel();assert.equal(h.calls.length,0);assert.equal(h.search.controller.signal.aborted,true);
 });
+test('starting another wait cancels the previous timer and request',()=>{
+ const h=setup('speech');const old=h.search;
+ const next=h.context.beginSearchWait('chat');assert.equal(old.finished,true);assert.equal(old.controller.signal.aborted,true);
+ assert.equal(h.timers.size,1);next.cancel();assert.equal(h.timers.size,0);assert.equal(h.dialog.open,false);
+});

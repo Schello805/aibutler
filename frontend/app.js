@@ -319,11 +319,12 @@ $('save').onclick = async () => { try { const value = JSON.parse($('context-json
 let pendingSearch=null;
 function beginSearchWait(kind='chat'){
   const controller=new AbortController(),requestId=crypto.randomUUID().replaceAll('-','');
-  const search={controller,requestId,timer:null,finished:false};pendingSearch=search;
+  pendingSearch?.cancel();
+  const search={controller,requestId,kind,timer:null,finished:false};pendingSearch=search;
   const arm=()=>{search.timer=setTimeout(()=>{if(!search.finished&&pendingSearch===search&&!$('search-wait-dialog').open){$('search-wait-title').textContent=kind==='speech'?'Spracherkennung dauert noch':'Noch keine Antwort';$('search-wait-description').textContent=kind==='speech'?'Die Sprachaufnahme wird seit 20 Sekunden verarbeitet. Weitere 20 Sekunden warten oder abbrechen?':'Nach 20 Sekunden liegt noch keine Antwort vor. Soll ich weitersuchen oder abbrechen?';$('search-wait-dialog').showModal();}},20000);};
   search.continue=()=>{if(search.finished)return;$('search-wait-dialog').close();clearTimeout(search.timer);arm();};
   search.finish=()=>{search.finished=true;clearTimeout(search.timer);if(pendingSearch===search){pendingSearch=null;if($('search-wait-dialog').open)$('search-wait-dialog').close();}};
-  search.cancel=()=>{if(search.finished)return;controller.abort();if(kind==='chat')api('chat/cancel',{method:'POST',body:JSON.stringify({request_id:requestId})}).catch(()=>{});stopVoice();search.finish();};
+  search.cancel=()=>{if(search.finished)return;controller.abort();if(kind==='chat')api('chat/cancel',{method:'POST',body:JSON.stringify({request_id:requestId})}).catch(()=>{});search.finish();stopVoice();};
   arm();return search;
 }
 $('search-continue').onclick=()=>pendingSearch?.continue();
@@ -372,7 +373,7 @@ function localGermanVoices(){
   const voices=read();if(voices.length)return Promise.resolve(voices);
   return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);speechSynthesis.removeEventListener('voiceschanged',finish);resolve(read());};const timer=setTimeout(finish,1200);speechSynthesis.addEventListener('voiceschanged',finish);});
 }
-function stopVoice(){voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
+function stopVoice(){if(pendingSearch&&(pendingSearch.kind==='speech'||voiceConversation))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
 async function startLocalRecording(){
   if(recorder||chatBusy||voiceStarting)return;
   const actor=currentUser?.id,revision=authRevision,turn=voiceEpoch;if(!actor)return;
@@ -474,7 +475,7 @@ const services = [
   {id:'ntfy', title:'Benachrichtigungen', icon:'♧', description:'Nur wichtige neue Hinweise oder eine gebündelte Zusammenfassung. Keine Meldungen für Chat, Einstellungen oder Altbestände. Der Test sendet eine Testnachricht.', fields:[
     ['ntfy_url','Vollständige Topic-URL','url'], ['ntfy_token','Token (optional)','password'], ['ntfy_mode','Benachrichtigungen','ntfy-mode'], ['ntfy_interval_seconds','Mindestabstand (Minuten)','minutes'], ['ntfy_history_urls','Ereignis-Topics zum Lesen (eine vollständige URL pro Zeile)','textarea'], ['ntfy_history_enabled','ntfy-Verlauf lokal archivieren und als KI-Kontext nutzen','checkbox']
   ]},
-  {id:'icloud_calendar',title:'iCloud · Kalender',description:'Kalender einschließlich für deinen Apple-Account freigegebener Kalender rein lesend einbinden. Nur ausgewählte Kalender werden abgefragt. Apple verlangt ein app-spezifisches Passwort; kein normales Apple-Passwort eingeben. Quellen sind im Butler gemeinsam nutzbar.',fields:[['icloud_calendar_enabled','Kalenderabfragen aktivieren','checkbox'],['icloud_calendar_user','Apple-Account / E-Mail','text'],['icloud_calendar_password','App-spezifisches Passwort','password'],['icloud_calendar_names','Kalendernamen (optional; leer = alle lesbaren, mit Komma getrennt)','text']]},
+  {id:'icloud_calendar',title:'iCloud · Kalender',description:'Kalender einschließlich für deinen Apple-Account freigegebener Kalender rein lesend einbinden. Nur ausgewählte Kalender werden abgefragt: 180 Tage zurück und 180 Tage voraus; konkrete Datumsfragen können darüber hinaus abrufen. Apple verlangt ein app-spezifisches Passwort; kein normales Apple-Passwort eingeben. Quellen sind im Butler gemeinsam nutzbar.',fields:[['icloud_calendar_enabled','Kalenderabfragen aktivieren','checkbox'],['icloud_calendar_user','Apple-Account / E-Mail','text'],['icloud_calendar_password','App-spezifisches Passwort','password'],['icloud_calendar_names','Kalendernamen (optional; leer = alle lesbaren, mit Komma getrennt)','text']]},
   {id:'icloud_contacts',title:'iCloud · Kontakte',description:'Namen, E-Mail-Adressen, Telefonnummern und Firmenangaben lesend aktualisieren. Keine automatische Änderung deiner Kontakte. Eigene Kontaktkarte unter Mein Konto einmal zuordnen; Firmenangaben werden danach dynamisch gelesen. Quellen sind im Butler gemeinsam nutzbar.',fields:[['icloud_contacts_enabled','Kontaktabfragen aktivieren','checkbox'],['icloud_contacts_user','Apple-Account / E-Mail','text'],['icloud_contacts_password','App-spezifisches Passwort','password']]},
   {id:'iobroker', title:'ioBroker · Smart Home', icon:'⌂', description:'Smart-Home-Zustände im Hintergrund als Kontext für deine KI-Fragen bereitstellen.', fields:[
     ['iobroker_url','API-Adresse (nicht die Admin-Oberfläche)','url'], ['iobroker_api','API-Adapter','iobroker-api'],

@@ -274,7 +274,7 @@ class Worker:
         from datetime import datetime,timedelta
         from zoneinfo import ZoneInfo
         start=datetime.now(ZoneInfo('Europe/Berlin')).replace(hour=0,minute=0,second=0,microsecond=0)
-        await self.personal.refresh('calendar',start,start+timedelta(days=14))
+        await self.personal.refresh('calendar',start-timedelta(days=180),start+timedelta(days=181))
 
     async def run_source(self,name):
         async with self.source_locks[name]:

@@ -245,6 +245,10 @@ class PersonalSources:
     async def refresh(self,kind,start=None,end=None,zone='Europe/Berlin',force=False):
         if not getattr(self.settings,'icloud_'+kind+'_enabled'):return None
         settings=self.settings.model_copy();scope=account_scope(settings,kind)
+        if kind=='calendar':
+            today=datetime.now(ZoneInfo(zone)).replace(hour=0,minute=0,second=0,microsecond=0)
+            start=min(start or today,today-timedelta(days=180))
+            end=max(end or today,today+timedelta(days=181))
         async with self.locks[kind]:
             previous=self.store.dav_snapshot(scope)
             key='icloud_'+kind
@@ -278,7 +282,7 @@ class PersonalSources:
                 return {**previous['value'],'checked':previous['checked'],'stale':True} if previous else None
 
     async def poll(self):
-        now=datetime.now(ZoneInfo('Europe/Berlin'));start=now.replace(hour=0,minute=0,second=0,microsecond=0);end=start+timedelta(days=14)
+        now=datetime.now(ZoneInfo('Europe/Berlin'));start=now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=180);end=start+timedelta(days=361)
         await asyncio.gather(self.refresh('calendar',start,end),self.refresh('contacts'))
 
     async def for_question(self,kind,*args,**kwargs):
@@ -291,7 +295,8 @@ class PersonalSources:
         need_calendar=wants_calendar(question) or 'calendar' in requested;need_contacts=self_profile_question(question) or wants_contacts(question,sender) or 'contacts' in requested or bool(need_calendar and identity)
         result={'sources':[],'diagnostics':[],'calendar':None,'contacts':[],'self_contact':None}
         today=datetime.now(ZoneInfo(zone)).date();day=target_day(question,today)
-        start=datetime.combine(day or today,daytime.min,ZoneInfo(zone));end=start+timedelta(days=1 if day else 14)
+        start=datetime.combine(day or today,daytime.min,ZoneInfo(zone));end=start+timedelta(days=1 if day else 181)
+        if not day:start-=timedelta(days=180)
         calendar,contacts=await asyncio.gather(self.for_question('calendar',start,end,zone,force=bool(re.search(r'aktuell|jetzt|live|neu laden',question,re.I))) if need_calendar else asyncio.sleep(0),self.for_question('contacts',force=self_profile_question(question) or bool(re.search(r'aktuell|live|neu laden|meine frau|mein mann',question,re.I))) if need_contacts else asyncio.sleep(0))
         for kind,data,needed in [('calendar',calendar,need_calendar),('contacts',contacts,need_contacts)]:
             enabled=getattr(self.settings,'icloud_'+kind+'_enabled')
@@ -302,7 +307,7 @@ class PersonalSources:
         if calendar:
             matching=[row for row in calendar['records'] if datetime.fromisoformat(row['start'])<end and (datetime.fromisoformat(row['end'])>start or (row['start']==row['end'] and datetime.fromisoformat(row['start'])>=start))]
             matching=[{**row,'user_participation':[person['status'] for person in row.get('attendees',[]) if person['email'].casefold() in own_emails]} for row in matching]
-            matching.sort(key=lambda row:row['start'])
+            matching.sort(key=lambda row:row['start'] if day else abs((datetime.fromisoformat(row['start']).date()-today).days))
             result['calendar']={'events':[{**row,'description':row.get('description','')[:500],'attendees':row.get('attendees',[])[:5]} for row in matching[:30]],'truncated':len(matching)>30,'checked':calendar['checked'],'stale':calendar['stale'],'incomplete':bool(calendar.get('partial')),'start':start.isoformat(),'end':end.isoformat(),'collections':calendar['collections'],'cached_window':{'start':calendar.get('start'),'end':calendar.get('end')},'note':'Nur ausgewählte/eingebundene Kalender. Keine Einträge bedeuten nicht automatisch Freizeit oder feste Arbeitszeiten. Geteilte Kalender enthalten auch Termine anderer Personen. OPAQUE/busy bedeutet Kalenderbelegung, nicht automatisch persönliche Teilnahme. user_participation gilt nur für Mailadressen der bestätigten eigenen Kontaktkarte; DECLINED ist keine Zusage. Ganztägige Termine beachten; Enddatum exklusiv.'}
             result['sources'].append({'id':'icloud_calendar:window:'+hashlib.sha256((account_scope(self.settings,'calendar')+start.isoformat()).encode()).hexdigest(),'source':'calendar','title':'iCloud-Kalenderabruf','excerpt':json.dumps({k:v for k,v in result['calendar'].items() if k!='events'},ensure_ascii=False),'document_date':start.isoformat(),'url':None})
             for row in matching[:20]:

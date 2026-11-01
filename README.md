@@ -505,3 +505,9 @@ Auch ein passender Satz wie „Der Hühnerstall ist fertig“ kann eine Rückfra
 Die Verbindungen sind als Akkordeon angeordnet: Die erste Verbindung ist anfangs geöffnet, beim Öffnen einer anderen schließt sie sich. Eingaben bleiben beim Zuklappen erhalten; Speichern und Testen erfolgen weiterhin pro Dienst.
 
 Für Feiertage wird bei Verbindungsfehlern des primären Nager.Date-Endpunkts zusätzlich `https://date.nager.at/api/v3/PublicHolidays/{Jahr}/{Land}` versucht. Beide Abfragen laufen ausschließlich über HTTPS mit Zertifikatsprüfung und festen Zieladressen. Es werden nur Land und Jahr übertragen. Die regionale Filterung bleibt lokal; kommunale Sonderfälle sind weiterhin nicht vollständig abgedeckt. Gespeicherte Ersatzdaten werden beim Verbindungstest ausdrücklich als veraltet gekennzeichnet.
+
+### Kalenderzeitraum
+
+Der regelmäßige iCloud-Abruf umfasst die letzten 180 Tage, heute und die nächsten 180 Tage. Auch ein Verbindungstest oder eine Tagesfrage verkleinert diesen lokalen Bestand nicht mehr auf einen einzelnen Tag. Erkannte konkrete Datumsfragen können den Abruf über dieses Fenster hinaus erweitern. Für Antworten werden passende Termine ausgewählt; bei einer gekürzten Auswahl wird dies im Antwortkontext gekennzeichnet. Das ist kein unbegrenzter Kalenderexport: Wiederholungsserien können endlos sein, deshalb bleiben Zeitfenster und Größenlimits erforderlich.
+
+„Gespräch beenden“ und der Abbruch im Wartedialog stoppen auch die zugehörige laufende Anfrage und entfernen den Wartetimer. Eine neue Anfrage ersetzt einen noch laufenden Wartedialog.
