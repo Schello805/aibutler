@@ -185,9 +185,14 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         if not getattr(s,service+'_enabled'):raise HTTPException(422,'Diese Verbindung zuerst aktivieren und speichern')
         try:
             day=datetime.now(ZoneInfo('Europe/Berlin')).date()
-            await (public_provider.weather(location,day) if service=='weather' else public_provider.holidays(location,day))
+            result=await (public_provider.weather(location,day) if service=='weather' else public_provider.holidays(location,day))
+            if result.get('stale'):
+                return {'ok':True,'warning':True,'message':'Anbieter derzeit nicht erreichbar · zuletzt gespeicherte Daten verfügbar.'}
             return {'ok':True,'message':'Verbindung erfolgreich · Daten für den Gerätestandort abrufbar.'}
-        except Exception:raise HTTPException(502,'Daten für diesen Standort nicht abrufbar.')
+        except ValueError as exc:
+            if str(exc)=='Land konnte nicht bestimmt werden':raise HTTPException(422,'Land fehlt. Bitte einen Ort über „Standort für Test wählen“ auswählen.')
+            raise HTTPException(502,'Feiertags- oder Wetterdienst derzeit nicht erreichbar. Bitte später erneut testen.')
+        except Exception:raise HTTPException(502,'Feiertags- oder Wetterdienst derzeit nicht erreichbar. Bitte später erneut testen.')
 
     @router.post('/{service}/test')
     async def test(service: Literal['llm','imap','paperless','ntfy','iobroker','internet','icloud_calendar','icloud_contacts']):

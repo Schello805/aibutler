@@ -499,8 +499,9 @@ function option(select, value, text) {
   const el=document.createElement('option'); el.value=value; el.textContent=text;select.append(el);
 }
 for (const service of services) {
-  const card=document.createElement('article');card.className='connection-card';card.id='service-'+service.id;
-  const heading=document.createElement('div');heading.className='connection-heading';
+  const card=document.createElement('details');card.className='connection-card';card.id='service-'+service.id;card.open=service===services[0];
+  card.addEventListener('toggle',()=>{if(card.open)for(const other of $('connection-cards').children)if(other!==card)other.open=false;});
+  const heading=document.createElement('summary');heading.className='connection-heading';
   const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',weather:'home',holidays:'history',icloud_calendar:'history',icloud_contacts:'mail',internet:'arrow'}[service.id]));
   const title=document.createElement('h3');title.textContent=service.title;heading.append(icon,title);card.append(heading);
   const description=document.createElement('p');description.textContent=service.description;card.append(description);

@@ -499,3 +499,9 @@ Pro Frage werden höchstens acht lokal ausgewählte bestätigte Erinnerungen ber
 Das lokale Merken und die Prüfung alter Chats senden keine Inhalte an einen KI-Anbieter. Für eine freigegebene externe Chatantwort dürfen passende bestätigte Erinnerungen wie andere ausgewählte Auszüge an den konfigurierten Anbieter gehen. Das ist keine Modell-Nachschulung. Einträge sind auf 2.000 Zeichen, insgesamt 500 je Konto und höchstens 50 offene Vorschläge begrenzt. Zugangsdaten gehören in die Verbindungsverwaltung. Löschen entfernt die Erinnerung, nicht die ursprüngliche Chatnachricht oder bereits vorhandene Backups.
 
 Auch ein passender Satz wie „Der Hühnerstall ist fertig“ kann eine Rückfrage zum Abschluss eines gespeicherten Vorhabens auslösen. Erst „Ja“ oder die entsprechende Schaltfläche markiert es als erledigt. Neue Projekte, Antworten auf Fragen und aus Dokumenten zitierte Aussagen werden dabei nicht automatisch zu bestätigten Fakten.
+
+### Verbindungseinstellungen und Feiertage
+
+Die Verbindungen sind als Akkordeon angeordnet: Die erste Verbindung ist anfangs geöffnet, beim Öffnen einer anderen schließt sie sich. Eingaben bleiben beim Zuklappen erhalten; Speichern und Testen erfolgen weiterhin pro Dienst.
+
+Für Feiertage wird bei Verbindungsfehlern des primären Nager.Date-Endpunkts zusätzlich `https://date.nager.at/api/v3/PublicHolidays/{Jahr}/{Land}` versucht. Beide Abfragen laufen ausschließlich über HTTPS mit Zertifikatsprüfung und festen Zieladressen. Es werden nur Land und Jahr übertragen. Die regionale Filterung bleibt lokal; kommunale Sonderfälle sind weiterhin nicht vollständig abgedeckt. Gespeicherte Ersatzdaten werden beim Verbindungstest ausdrücklich als veraltet gekennzeichnet.

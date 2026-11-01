@@ -81,8 +81,8 @@ class PublicData:
 
     async def get_json(self,url,params=None):
         # Fixed HTTPS origins only, no redirects, bounded responses and no inherited proxy.
-        if url not in ('https://api.open-meteo.com/v1/forecast','https://geocoding-api.open-meteo.com/v1/search') and not re.fullmatch(r'https://nagerholidays.com/api/v4/Holidays/[A-Z]{2}/20\d{2}',url):raise ValueError('Unzulässiges API-Ziel')
-        async with httpx.AsyncClient(timeout=12,follow_redirects=False,trust_env=False) as client:
+        if url not in ('https://api.open-meteo.com/v1/forecast','https://geocoding-api.open-meteo.com/v1/search') and not re.fullmatch(r'https://(?:nagerholidays.com/api/v4/Holidays/[A-Z]{2}/20\d{2}|date.nager.at/api/v3/PublicHolidays/20\d{2}/[A-Z]{2})',url):raise ValueError('Unzulässiges API-Ziel')
+        async with httpx.AsyncClient(timeout=6 if '/Holidays/' in url or '/PublicHolidays/' in url else 12,follow_redirects=False,trust_env=False) as client:
             async with client.stream('GET',url,params=params,headers={'User-Agent':'AIButler/1.0 (+https://github.com/Schello805/aibutler)','Accept':'application/json'}) as response:
                 response.raise_for_status();body=bytearray()
                 async for chunk in response.aiter_bytes():
@@ -148,14 +148,17 @@ class PublicData:
     async def holidays(self,location,day):
         if not location.country:raise ValueError('Land konnte nicht bestimmt werden')
         async def fetch():
-            raw=await self.get_json(f'https://nagerholidays.com/api/v4/Holidays/{location.country}/{day.year}')
+            try:
+                raw=await self.get_json(f'https://nagerholidays.com/api/v4/Holidays/{location.country}/{day.year}')
+            except (httpx.HTTPError, OSError):
+                raw=await self.get_json(f'https://date.nager.at/api/v3/PublicHolidays/{day.year}/{location.country}')
             if not isinstance(raw,list) or len(raw)>500:raise ValueError('Ungültige Feiertagsdaten')
             clean=[]
             for row in raw:
                 date.fromisoformat(row['date'])
-                subdivisions=row.get('subdivisionCodes') or []
+                subdivisions=row.get('subdivisionCodes',row.get('counties')) or []
                 if not isinstance(subdivisions,list) or not all(isinstance(code,str) for code in subdivisions):raise ValueError('Ungültige Regionen')
-                clean.append({'date':row['date'],'name':str(row.get('localName') or row['name'])[:200],'national':bool(row.get('nationalHoliday')),'subdivisions':subdivisions,'public':'Public' in row.get('holidayTypes',[])})
+                clean.append({'date':row['date'],'name':str(row.get('localName') or row['name'])[:200],'national':bool(row.get('nationalHoliday',row.get('global'))),'subdivisions':subdivisions,'public':'Public' in row.get('holidayTypes',row.get('types',[]))})
             return {'holidays':clean}
         value=await self.cached('holidays',f'{location.country}:{day.year}',86400,fetch)
         matches=[row for row in value['holidays'] if row['date']==day.isoformat() and row['public'] and (row['national'] or (location.subdivision and location.subdivision in row['subdivisions']))]

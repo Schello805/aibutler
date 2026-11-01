@@ -235,3 +235,20 @@ def test_location_preflight_cannot_read_another_accounts_conversation(tmp_path):
         client.cookies.set('butler_session',token)
         response=client.post('/api/chat/location-needed',headers={'Origin':'https://testserver'},json={'message':'Wetter morgen?','conversation_id':conversation})
         assert response.status_code==404 and 'private response' not in response.text
+
+
+def test_holidays_fallback_v3_preserves_regional_filter(tmp_path,monkeypatch):
+    import httpx
+    _,provider=make(tmp_path,holidays_enabled=True)
+    calls=[]
+    async def get(url,params=None):
+        calls.append(url)
+        if 'api/v4/' in url:raise httpx.ConnectError('DNS unavailable')
+        return [{'date':'2026-11-01','localName':'Allerheiligen','name':'All Saints','global':False,'counties':['DE-BY'],'types':['Public']},
+                {'date':'2026-11-01','name':'Observation','global':True,'counties':None,'types':['Observance']}]
+    monkeypatch.setattr(provider,'get_json',get)
+    result=asyncio.run(provider.holidays(DeviceLocation(**LOCATION),date(2026,11,1)))
+    assert [row['name'] for row in result['holidays']]==['Allerheiligen']
+    berlin=asyncio.run(provider.holidays(DeviceLocation(**{**LOCATION,'subdivision':'DE-BE'}),date(2026,11,1)))
+    assert berlin['holidays']==[]
+    assert calls==['https://nagerholidays.com/api/v4/Holidays/DE/2026','https://date.nager.at/api/v3/PublicHolidays/2026/DE']
