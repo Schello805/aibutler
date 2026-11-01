@@ -37,6 +37,15 @@ def local_decision(item, context):
     return 'Bezug zu '+', '.join(matches) if matches else None
 
 async def generate(settings, task, payload):
+    sink=answer_sink.get()
+    if sink is not None:
+        from .fast_chat import compact_payload
+        parts=[]
+        async for chunk in generate_stream(settings,task,compact_payload(payload)):
+            if chunk:parts.append(chunk);sink(chunk)
+        result=''.join(parts)
+        if not result:raise RuntimeError('Keine vollständige KI-Textantwort erhalten')
+        return result
     if not settings.allow_external_llm:
         return None
     if provider_is_limited(settings):
@@ -67,3 +76,54 @@ async def generate(settings, task, payload):
         if not text:
             raise RuntimeError('Keine vollständige KI-Textantwort erhalten')
         return text
+
+
+# Only answering requests opt in; planning/background analysis stay non-streaming.
+from contextvars import ContextVar
+answer_sink=ContextVar('answer_sink',default=None)
+
+
+async def generate_stream(settings,task,payload):
+    """Yield visible text only; reject incomplete or failed provider streams."""
+    if not settings.allow_external_llm:return
+    if provider_is_limited(settings):raise ProviderLimited('KI-Anbieter vorübergehend begrenzt (HTTP 429)')
+    if not settings.llm_api_key or not settings.llm_model:raise RuntimeError('LLM configuration missing')
+    if settings.llm_provider=='gemini' and not settings.gemini_paid_confirmed:raise RuntimeError('Gemini privacy configuration must be confirmed')
+    from urllib.parse import quote
+    if settings.llm_provider=='gemini':
+        url='https://generativelanguage.googleapis.com/v1beta/models/'+quote(settings.llm_model,safe='')+':streamGenerateContent'
+        headers={'x-goog-api-key':settings.llm_api_key}
+        body={'systemInstruction':{'parts':[{'text':SYSTEM+'\n'+task}]},'contents':[{'role':'user','parts':[{'text':json.dumps(payload,ensure_ascii=False)}]}],'generationConfig':{'maxOutputTokens':1200}}
+        params={'alt':'sse'}
+    else:
+        url='https://api.openai.com/v1/responses';headers={'Authorization':'Bearer '+settings.llm_api_key};params=None
+        body={'model':settings.llm_model,'store':False,'stream':True,'instructions':SYSTEM+'\n'+task,'input':json.dumps(payload,ensure_ascii=False),'max_output_tokens':2400}
+    completed=False;size=0
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30,connect=5),follow_redirects=False) as client:
+        async with client.stream('POST',url,headers=headers,json=body,params=params) as response:
+            check_response(response,settings)
+            data=[]
+            async for line in response.aiter_lines():
+                size+=len(line)
+                if size>1024*1024:raise RuntimeError('KI-Antwort zu groß')
+                if line.startswith('data:'):data.append(line[5:].lstrip())
+                elif not line and data:
+                    raw='\n'.join(data);data=[]
+                    if raw=='[DONE]':continue
+                    event=json.loads(raw)
+                    if settings.llm_provider=='gemini':
+                        if event.get('error'):raise RuntimeError('Gemini stream failed')
+                        for candidate in event.get('candidates',[]):
+                            for part in candidate.get('content',{}).get('parts',[]):
+                                if part.get('text') and not part.get('thought'):yield part['text']
+                            finish=candidate.get('finishReason')
+                            if finish and finish!='STOP':raise RuntimeError('Gemini response incomplete')
+                            if finish=='STOP':completed=True
+                    else:
+                        kind=event.get('type')
+                        if kind in ('response.output_text.delta','response.refusal.delta'):yield event.get('delta','')
+                        elif kind=='response.completed':
+                            if event.get('response',{}).get('status','completed')!='completed':raise RuntimeError('Response incomplete')
+                            completed=True
+                        elif kind in ('error','response.failed','response.incomplete'):raise RuntimeError('Response stream failed')
+    if not completed:raise RuntimeError('KI-Antwort wurde unterbrochen')
