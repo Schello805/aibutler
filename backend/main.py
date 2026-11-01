@@ -19,6 +19,7 @@ from .store import Store
 from .accounts import Accounts
 from .worker import Worker
 from .intelligence import generate, ProviderLimited, provider_is_limited
+from .public_data import PublicData,DeviceLocation,outdoor_question,needs_public_context,target_day
 from .planning import plan_question,complete_plan
 from .smarthome import scope
 from .lighting import is_current_lighting_question, light_answer
@@ -37,6 +38,7 @@ class Context(BaseModel):
 
 class Chat(BaseModel):
     message: str = Field(min_length=1,max_length=4000)
+    device_location:DeviceLocation | None=None
     share_external: bool = False
     conversation_id: str | None = Field(default=None,pattern=r'^[a-f0-9]{32}$')
 
@@ -45,6 +47,7 @@ def create_app(settings=None):
     s = settings or Settings(_env_file=os.environ.get('BUTLER_ENV_FILE','.env'))
     store = Store(s.data_dir)
     worker = Worker(s,store)
+    public_data=PublicData(s,store)
     accounts=Accounts(store)
     app_password_slots=asyncio.Semaphore(2)
     @asynccontextmanager
@@ -78,6 +81,7 @@ def create_app(settings=None):
         return await call_next(request)
     app.add_middleware(SecurityMiddleware)
     cookie_name='butler_session'
+    app.state.public_data=public_data
     app.state.accounts=accounts
 
     def local_browser(request):
@@ -203,7 +207,7 @@ def create_app(settings=None):
 
     @app.get('/api/status',dependencies=protected)
     async def status():
-        return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url)}}
+        return {**worker.status,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm,'worker_enabled':s.worker_enabled,'llm_limited':provider_is_limited(s),'configured_sources':{'imap':bool(s.imap_host),'paperless':bool(s.paperless_url),'ntfy':bool(s.ntfy_history_urls or s.ntfy_url),'iobroker':bool(s.iobroker_url),'weather':s.weather_enabled,'holidays':s.holidays_enabled}}
     @app.get('/api/sync',dependencies=protected)
     async def sync_status():
         import hashlib
@@ -220,6 +224,15 @@ def create_app(settings=None):
             'mail_enabled':s.imap_archive_enabled,'ntfy_enabled':s.ntfy_history_enabled,
         }
         return overview
+
+    class LocationSearch(BaseModel):
+        query:str=Field(min_length=2,max_length=80)
+
+    @app.post('/api/locations/search',dependencies=protected)
+    async def location_search(value:LocationSearch):
+        if not(s.weather_enabled or s.holidays_enabled):raise HTTPException(422,'Wetter oder Feiertage zuerst aktivieren')
+        try:return {'locations':await public_data.locations(value.query.strip())}
+        except Exception:raise HTTPException(502,'Ortssuche ist gerade nicht verfügbar')
 
     @app.get('/api/context',dependencies=protected)
     async def context():
@@ -247,6 +260,15 @@ def create_app(settings=None):
         if result is None:raise HTTPException(404,'Gespräch nicht gefunden')
         return result
 
+    @app.post('/api/chat/location-needed',dependencies=protected)
+    async def location_needed(value:Chat,request:Request):
+        previous=store.conversation(value.conversation_id,user_owner(request)) if value.conversation_id else None
+        if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')
+        history=[message for message in (previous['messages'] if previous else []) if message['role']=='user']
+        weather,holidays=needs_public_context(value.message,history)
+        if target_day(value.message,datetime.now(ZoneInfo('Europe/Berlin')).date()) is None:return {'needed':False}
+        return {'needed':bool((weather and s.weather_enabled) or (holidays and s.holidays_enabled))}
+
     chat_slots=asyncio.Semaphore(2)
     async def chat_capacity():
         if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
@@ -270,6 +292,7 @@ def create_app(settings=None):
             result={'answer':light_answer(value.message,lighting),'sources':sources,'diagnostics':diagnostics,'external_used':False,'answer_mode':'live' if lighting.get('fresh') else 'local','query_kind':'lighting','ai_issue':None,'query_planned_by_ai':False}
             result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)
             return result
+        display_zone=value.device_location.timezone if value.device_location else 'Europe/Berlin'
         chat_enabled=s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm
         interactive=bool(value.share_external and chat_enabled)
         chat_settings=s.model_copy(update={'allow_external_llm':bool(chat_enabled)})
@@ -287,8 +310,10 @@ def create_app(settings=None):
         queries=plan.queries if plan else []
         async def skip_mail():return None
         mail_task=worker.search_mail_context(value.message,sender_hint=sender,queries=queries) if 'email' in selected or not plan else skip_mail()
-        tasks=[mail_task,worker.search_document_context(queries) if 'paperless' in selected else asyncio.sleep(0),worker.poll_ntfy() if 'ntfy' in selected else asyncio.sleep(0)]
+        tasks=[mail_task,worker.search_document_context(queries) if 'paperless' in selected else asyncio.sleep(0),worker.poll_ntfy() if 'ntfy' in selected else asyncio.sleep(0),public_data.context(value.message,value.device_location,history)]
         source_results=await asyncio.gather(*tasks,return_exceptions=True)
+        public_context=source_results[3] if isinstance(source_results[3],dict) else {'sources':[],'diagnostics':['Öffentliche Zusatzdaten konnten nicht geladen werden.']}
+        activity_hits=store.activity_context() if outdoor_question(value.message) else []
         mail_search=source_results[0] if isinstance(source_results[0],dict) else None
         if plan:
             if plan.intent=='person' and sender:
@@ -317,6 +342,8 @@ def create_app(settings=None):
             for query in plan.queries:
                 for hit in store.search(query,strict=False,source_filter=extra_allowed,recent=plan.recent):
                     if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.append(hit)
+            for hit in activity_hits:
+                if hit['item_id'] not in seen:seen.add(hit['item_id']);hits.insert(0,hit)
             hits=[hit for hit in hits if relevant_evidence(value.message,hit['title'],hit['body']) and (plan.intent!='purchases' or purchase_evidence(hit))]
             # Reserve at least one matching result from each requested source.
             groups={}
@@ -349,7 +376,7 @@ def create_app(settings=None):
         provider_issue=None
         if interactive:
             try:
-                answer = await generate(chat_settings,'Beantworte persönliche Fragen ausschließlich anhand der bereitgestellten Quellen, Zustände und Gesprächsnachrichten. Fehlt ein passender Beleg, sage knapp, dass du es nicht weißt; erfinde keine persönlichen Tatsachen. Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Für zuletzt zählt das belegte Ereignis- oder Leistungsdatum, nicht automatisch das Rechnungs- oder Importdatum. Eine Bestätigung zur Registrierung ist von einer Anmeldung und ein angeforderter Login-Code von einem abgeschlossenen Login zu unterscheiden. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'conversation':history,'current_date':datetime.now(ZoneInfo('Europe/Berlin')).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':'Europe/Berlin','current_time':datetime.now(ZoneInfo('Europe/Berlin')).isoformat()})
+                answer = await generate(chat_settings,'Beantworte persönliche Fragen ausschließlich anhand der bereitgestellten Quellen, Zustände und Gesprächsnachrichten. Fehlt ein passender Beleg, sage knapp, dass du es nicht weißt; erfinde keine persönlichen Tatsachen. Beantworte die Frage direkt und natürlich, normalerweise in ein bis zwei kurzen Sätzen. Nenne zuerst das Ergebnis. Ordne Quellen nach Bedeutung und Aktualität ein. Für zuletzt zählt das belegte Ereignis- oder Leistungsdatum, nicht automatisch das Rechnungs- oder Importdatum. Eine Bestätigung zur Registrierung ist von einer Anmeldung und ein angeforderter Login-Code von einem abgeschlossenen Login zu unterscheiden. Unterscheide ausdrücklich belegte Tatsachen und plausible Schlussfolgerungen; kennzeichne eine Vermutung kurz mit wahrscheinlich. Nutze bei E-Mails die aktuelle Nachricht statt älterer zitierter Korrespondenz. Verbinde bei Bedarf E-Mails, Dokumente, ntfy-Ereignisse und passende Smart-Home-Zustände anhand von Datum, Uhrzeit und konkreten Entitäten. Ein Klingelereignis allein beweist keine Paketzustellung, kann zusammen mit Zustellhinweisen aber eine wahrscheinliche Schlussfolgerung stützen. Eine fehlende historische Aufzeichnung beweist nicht, dass nichts passiert ist. Beachte den noch laufenden Archivimport und die begrenzte ntfy-Aufbewahrung. Bei mehrdeutigen Begriffen kläre die zwei naheliegenden Bedeutungen knapp. Bei Außenarbeiten verknüpfe passende frühere Bitten/Vorhaben mit den öffentlichen Wetter- und Feiertagsdaten. Eine frühere Bitte beweist nicht, dass ein Projekt noch offen ist oder dass der Nutzer jetzt dieses meint. Bei mehreren plausiblen Projekten frage kurz nach; bei einem passenden Vorhaben formuliere bedingt, z.B. falls du den Hühnerstall meinst. Beziehungsrollen wie Ehefrau dürfen nicht aus einem Namen geraten werden. Der Gerätestandort ist nicht automatisch der Projektstandort; übertrage ihn nicht stillschweigend auf das Zuhause. Bei Feiertagen bleiben kommunale Sonderfälle und Lärmregeln ungeprüft; erfinde keine Erlaubnis für laute Arbeiten. Fehlende oder veraltete Wetterdaten erlauben keine definitive Ja-Antwort. Keine Fundstellenlisten, Quellen-IDs, Rohzitate, Suchdiagnostik, ungefragten Rechts-/Vertragsbelehrungen oder allgemeinen Sicherheitshinweise. Belege werden separat angezeigt. Erkläre ausführlicher nur auf ausdrücklichen Wunsch.',{'question':value.message,'public_context':{k:v for k,v in public_context.items() if k!='sources'},'activity_evidence':activity_hits,'conversation':history,'current_date':datetime.now(ZoneInfo(display_zone)).date().isoformat(),'context':store.context(),'sources':hits,'smart_home':smart_context,'mail_search':mail_search,'source_coverage':store.coverage_summary(),'smart_home_changes':store.smart_history_context(scope(s),smart_queries or [value.message]),'display_timezone':display_zone,'current_time':datetime.now(ZoneInfo(display_zone)).isoformat()})
             except ProviderLimited:
                 provider_issue='Der KI-Anbieter begrenzt gerade Anfragen (HTTP 429). Die Antwort wurde aus lokalen Belegen erstellt.'
             except Exception:
@@ -364,7 +391,7 @@ def create_app(settings=None):
             local='Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.'
         if provider_issue and not hits and not smart_context:
             local='Das kann ich gerade nicht zuverlässig aus deinen Daten beantworten. Meine KI-Auswertung ist vorübergehend nicht verfügbar.'
-        diagnostics=[provider_issue] if provider_issue else []
+        diagnostics=([provider_issue] if provider_issue else [])+public_context.get('diagnostics',[])
         if unavailable:
             diagnostics.append('Aktueller Abruf unvollständig: '+', '.join(unavailable))
         if mail_search:
@@ -395,7 +422,20 @@ def create_app(settings=None):
             sources.append({'id':'iobroker:snapshot','source':'smart_home','title':'ioBroker-Kontext','excerpt':'Passende Zustände wurden im Hintergrund berücksichtigt.'})
         # A precise locally extracted execution date/period remains available without cloud access.
         if not answer:
+            if any(needs_public_context(value.message,history)):
+                if public_context.get('date_needed'):local='Welchen Tag meinst du genau? Bitte nenne ein Datum oder einen Wochentag.'
+                elif public_context.get('location_needed'):local='Für welchen Ort möchtest du das wissen? Du kannst den Standort dieses Geräts im Chat freigeben.'
+                elif public_context.get('weather') and not public_context['weather']['stale'] and public_context['weather']['hours']:
+                    hours=public_context['weather']['hours'];temperatures=[row['temperature_2m'] for row in hours if row['temperature_2m'] is not None];rain=[row['precipitation_probability'] for row in hours if row['precipitation_probability'] is not None]
+                    local=('Für '+public_context['weather']['date']+': '+str(min(temperatures))+' bis '+str(max(temperatures))+' °C'+(', Regenwahrscheinlichkeit bis '+str(max(rain))+' %' if rain else '')+'.') if temperatures else 'Die Wetterdaten sind unvollständig.'
+                    if activity_hits:local+=' Ich habe außerdem frühere Vorhaben gefunden. Welches meinst du?'
+                elif needs_public_context(value.message,history)[0] and not s.weather_enabled:local='Bitte aktiviere Wetter unter Einstellungen → Verbindungen und wähle einen Ort oder gib den Gerätestandort frei.'
+                elif needs_public_context(value.message,history)[0]:local='Für den angefragten Tag fehlen mir aktuelle Wetterdaten. Die Prognose umfasst höchstens die nächsten sieben Tage.'
+                elif public_context.get('holidays') and not public_context['holidays']['stale']:
+                    data=public_context['holidays'];local=(data['date']+': '+', '.join(row['name'] for row in data['holidays'])+'.') if data['holidays'] else 'Für diesen Tag ist in den verfügbaren Daten kein passender Feiertag eingetragen. Kommunale Ausnahmen sind nicht abgedeckt.'
+                else:local='Dafür fehlen mir gerade aktuelle Wetter- oder Feiertagsdaten. Bitte die Verbindung in den Einstellungen prüfen.'
             answer=local
+        sources.extend(public_context.get('sources',[]))
         result={'answer':answer,'sources':sources,'diagnostics':diagnostics,'external_used':bool(interactive and not provider_issue),'answer_mode':'ai' if interactive and not provider_issue else 'local','ai_issue':provider_issue,'query_planned_by_ai':planned_by_ai}
         result['conversation_id']=store.save_exchange(value.conversation_id,value.message,result,owner_id)
         return result

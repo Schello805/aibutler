@@ -11,6 +11,8 @@ Die Regressionstests verwenden synthetische E-Mails und Dokumente. Sie prüfen d
 | Ist Paket XYZ schon da? | E-Mail und ntfy werden gemeinsam recherchiert, auch wenn die KI-Suchplanung ausfällt oder eine Quelle auslässt. Eine Klingelmeldung allein ist kein Zustellbeweis. |
 | Was habe ich zuletzt gekauft? | Bestätigte Bestellungen und Kaufbelege werden gegenüber Versandmeldungen und Werbung berücksichtigt. Deutsche Tausender-/Dezimaltrennzeichen bleiben lesbar. |
 | Was wollte Tanja zuletzt? | Tatsächliche Absendernachrichten werden von bloßen Namensnennungen in anderen E-Mails getrennt. HTML und ältere zitierte Korrespondenz werden bei der lokalen Kurzantwort berücksichtigt. |
+| Kann ich morgen draußen arbeiten? | Frühere Bitten zu Bau-/Gartenvorhaben werden mit Wetter und Feiertagen des übergebenen Gerätestandorts kombiniert. Auch während der Frage nachgeladene E-Mails werden berücksichtigt. Projektstatus und Projektstandort werden nicht automatisch als bekannt behandelt. |
+| Geräteort und öffentliche Daten | Koordinaten werden gerundet, Feiertage nach Land/Bundesland gefiltert und alte Cache-Daten als veraltet markiert. Private Mailtexte werden nicht an die Wetter-/Feiertagsdienste gesendet. |
 | KI-Suchplanung nicht verfügbar | Ein lokaler Rechercheplan hält typische Dienstabfragen verfügbar. Eine anschließend funktionierende Antwort-KI kann deren Belege verwenden; eine Freigabe für externe KI wird dadurch nicht automatisch aktiviert. |
 
 Die Antwortanweisung verlangt kurze, belegte Antworten und trennt Vermutungen von bestätigten Tatsachen. Ohne passende persönliche Belege soll die KI ihr Nichtwissen ausdrücken. Belege und technische Suchgrenzen bleiben im separaten Dialog.

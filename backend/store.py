@@ -22,6 +22,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS conversation_order ON conversation_messages(conversation_id,id);
             CREATE TABLE IF NOT EXISTS smart_history(id INTEGER PRIMARY KEY,scope TEXT,state_id TEXT,name TEXT,value TEXT,status TEXT,checked TEXT,source_ts TEXT);
             CREATE INDEX IF NOT EXISTS smart_history_latest ON smart_history(scope,state_id,id DESC);
+            CREATE TABLE IF NOT EXISTS public_cache(key TEXT PRIMARY KEY,value TEXT,checked REAL);
             CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT);
             CREATE TABLE IF NOT EXISTS mail_metadata(item_id TEXT PRIMARY KEY,sender_name TEXT,sender_address TEXT,sent_at TEXT);
             CREATE TABLE IF NOT EXISTS item_metadata(item_id TEXT PRIMARY KEY, document_date TEXT, filename TEXT);
@@ -43,6 +44,36 @@ class Store:
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         return db
+
+    def public_cache(self,key):
+        with self.connect() as db:
+            row=db.execute('SELECT value,checked FROM public_cache WHERE key=?',(key,)).fetchone()
+            return {'value':json.loads(row['value']),'checked':row['checked']} if row else None
+
+    def save_public_cache(self,key,value):
+        import time
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO public_cache VALUES(?,?,?)',(key,json.dumps(value),time.time()))
+            db.execute('DELETE FROM public_cache WHERE checked<?',(time.time()-32*86400,))
+            db.execute('DELETE FROM public_cache WHERE key NOT IN (SELECT key FROM public_cache ORDER BY checked DESC LIMIT 1000)')
+
+    def activity_context(self):
+        # Bounded, local recall of actual requests and progress reports, never a new AI profile.
+        expression=' OR '.join('"'+word+'"*' for word in ('bau','hühner','garten','streich','repar','renov','erricht','montier','schuppen','zaun','terrass'))
+        with self.connect() as db:
+            rows=db.execute("SELECT i.id AS item_id,i.title,i.body,i.source,m.document_date FROM items i LEFT JOIN item_metadata m ON m.item_id=i.id WHERE i.source IN ('imap','paperless') AND i.id IN (SELECT item_id FROM chunks WHERE chunks MATCH ?) ORDER BY m.document_date DESC,i.rowid DESC LIMIT 200",(expression,))
+            result=[]
+            for row in rows:
+                hit=dict(row)
+                if re.search(r'newsletter|rabatt|sonderangebot|stellenangebot|werbung',hit['title'],re.I):continue
+                text=message_text(hit['body'])
+                text=re.split(r'(?im)^\s*(?:Am .{8,100}schrieb|On .{8,100}wrote|Von:|From:|-----Original|>{1,})',text)[0]
+                if not re.search(r'kannst du|könntest du|würdest du|bitte|ich möchte|wir möchten|wir sollten|fertig gebaut|bereits erledigt|abgesagt',text,re.I):continue
+                hit['body']=text[:3000]
+                hit['activity_status']='completed_or_cancelled' if re.search(r'fertig gebaut|bereits erledigt|abgesagt|nicht mehr nötig',text,re.I) else 'request_status_unknown'
+                result.append(hit)
+                if len(result)==4:break
+            return result
 
     def context(self):
         with self.connect() as db:

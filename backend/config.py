@@ -2,9 +2,10 @@ from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from .smarthome import IoBrokerConfig
+from .public_data import PublicConfig
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings(BaseSettings, IoBrokerConfig):
+class Settings(BaseSettings, IoBrokerConfig,PublicConfig):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
     speech_enabled: bool = True
     public_origin: str = ''

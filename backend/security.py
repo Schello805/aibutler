@@ -6,7 +6,7 @@ JSON_LIMIT=1024*1024
 AUDIO_LIMIT=4*1024*1024
 CSP="; ".join((
     "default-src 'none'", "script-src 'self'", "style-src 'self'",
-    "img-src 'self' data:", "font-src 'self'", "connect-src 'self'",
+    "img-src 'self' data:", "font-src 'self'", "connect-src 'self' https://api.bigdatacloud.net/data/reverse-geocode-client",
     "media-src 'self' blob:", "worker-src 'self'", "manifest-src 'self'",
     "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
 ))
@@ -24,7 +24,7 @@ class SecurityMiddleware:
                     (b'x-frame-options',b'DENY'),
                     (b'x-content-type-options',b'nosniff'),
                     (b'referrer-policy',b'no-referrer'),
-                    (b'permissions-policy',b'microphone=(self), camera=(), geolocation=(), payment=(), usb=()'),
+                    (b'permissions-policy',b'microphone=(self), camera=(), geolocation=(self), payment=(), usb=()'),
                     (b'x-dns-prefetch-control',b'off'),
                 ])
                 if scope.get('scheme')=='https':

@@ -9,9 +9,12 @@ from dotenv import set_key
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from .intelligence import generate
+from .public_data import PublicConfig,PublicData,DeviceLocation
 from .smarthome import IoBrokerConfig, read_iobroker, scope
 
 SERVICE_FIELDS = {
+    'weather':{'weather_enabled'},
+    'holidays':{'holidays_enabled'},
     'llm': {'llm_provider','llm_model','llm_api_key','allow_external_llm','chat_llm_enabled','gemini_paid_confirmed'},
     'imap': {'imap_host','imap_port','imap_user','imap_password','imap_folder','imap_archive_enabled','imap_archive_all_folders'},
     'paperless': {'paperless_url','paperless_token'},
@@ -25,7 +28,7 @@ class ModelRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
 
 SECRET_FIELDS = {'llm_api_key','imap_password','paperless_token','ntfy_token','iobroker_password','iobroker_token'}
-class ConnectionConfig(IoBrokerConfig):
+class ConnectionConfig(IoBrokerConfig,PublicConfig):
     model_config = ConfigDict(extra='forbid')
     llm_provider: Literal['openai','gemini'] = 'openai'
     llm_model: str = Field(default='',max_length=150,pattern=r'^[a-zA-Z0-9._-]*$')
@@ -117,7 +120,7 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         return await persist(value)
 
     @router.put('/{service}')
-    async def save_service(service: Literal['llm','imap','paperless','ntfy','iobroker'], value: ConnectionConfig):
+    async def save_service(service: Literal['llm','imap','paperless','ntfy','iobroker','weather','holidays'], value: ConnectionConfig):
         return await persist(value, service)
 
     @router.post('/llm/models')
@@ -167,6 +170,18 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
         if result.get('error'):
             raise HTTPException(502,result['error'])
         return await smart_states()
+
+    public_provider=PublicData(s,worker.store)
+    @router.post('/{service}/preview')
+    async def preview(service:Literal['weather','holidays'],location:DeviceLocation):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        if not getattr(s,service+'_enabled'):raise HTTPException(422,'Diese Verbindung zuerst aktivieren und speichern')
+        try:
+            day=datetime.now(ZoneInfo('Europe/Berlin')).date()
+            await (public_provider.weather(location,day) if service=='weather' else public_provider.holidays(location,day))
+            return {'ok':True,'message':'Verbindung erfolgreich · Daten für den Gerätestandort abrufbar.'}
+        except Exception:raise HTTPException(502,'Daten für diesen Standort nicht abrufbar.')
 
     @router.post('/{service}/test')
     async def test(service: Literal['llm','imap','paperless','ntfy','iobroker','internet']):

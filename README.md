@@ -199,6 +199,18 @@ Typische Recherchefälle und ihre Grenzen sind in [ANSWER_QUALITY.md](ANSWER_QUA
 
 **Wissensquellen** zeigt Mengen und Importfortschritt. Ein großer Mailbestand wird schrittweise und fortsetzbar eingelesen. Das ist kein sofort abgeschlossener Gesamtabruf. Rechnungen, alte E-Mails und bereits importierte Ereignisse sind anschließend lokal durchsuchbar. Zusätzliche passende Quellen werden bei Chatfragen lesend nachgeladen.
 
+### Wetter, Feiertage und frühere Vorhaben kombinieren
+
+Unter **Einstellungen → Verbindungen** lassen sich **Wetter · Open-Meteo** und **Feiertage · Nager.Date** einzeln aktivieren, speichern und testen. Dafür sind keine API-Keys nötig. Open-Meteo ist hier für private, nichtkommerzielle Nutzung vorgesehen. Öffentliche Daten werden zeitlich begrenzt lokal zwischengespeichert und getrennt vom privaten Dokumentindex geführt.
+
+Der Ort wird **pro fragendem Gerät** gewählt: Im Chat **„Standort an Wetter-/Ortsdienste freigeben“** aktivieren und die Browserfreigabe erteilen. Das funktioniert unter HTTPS oder localhost; am Handy muss die HTTPS-Adresse des Butlers verwendet werden. Abfragen erfolgen nur bei passenden Fragen, ohne dauerhafte Ortung. Der Browser rundet Koordinaten auf zwei Nachkommastellen, bevor sie übertragen werden. Alternativ über **Ort wählen** einen Ort suchen und für die aktuelle Sitzung auswählen; dieser wird beim Abmelden verworfen. Eine Standortfreigabe ist keine Garantie für eine genaue GPS-Position, insbesondere am Desktop oder nahe Landesgrenzen.
+
+**Datenempfänger:** Für Wetter erhält Open-Meteo gerundete Koordinaten; für die manuelle Ortssuche nur den eingegebenen Ortsnamen. Für automatische Land-/Bundeslanderkennung ruft der Browser zusätzlich BigDataCloud mit dem aktuellen gerundeten Standort auf. BigDataCloud verwendet Standort/IP-Paare zur Verbesserung seiner Geodaten; siehe [Datennutzung](https://www.bigdatacloud.com/docs/article/why-is-reverse-geocoding-api-free). Wer das vermeiden möchte, wählt den Ort manuell. Nager.Date erhält nur Land und Jahr. E-Mails, Dokumente und Chattexte werden an diese Datendienste nicht gesendet. Die separate Freigabe für externe Chat-KI bleibt davon unberührt. Ortsbezeichnungen können zusammen mit den Wetterbelegen im privaten Chatverlauf erhalten bleiben; es gibt keinen fortlaufenden Standortverlauf im Hintergrund.
+
+Bei **„Kann ich morgen draußen arbeiten?“** sucht der Butler zusätzlich lokal nach passenden Bitten und Vorhaben in indexierten E-Mails und Dokumenten. Eine Mail „Bitte baue den Hühnerstall“ kann so mit der Tagesprognose verknüpft werden. Der Status bleibt ohne Fortschrittsmeldung unbekannt; eine alte Bitte wird nicht automatisch zur offenen Aufgabe. Bei mehreren passenden Projekten soll die KI nachfragen. Der Gerätestandort ist nicht automatisch der Standort des Gartens oder Projekts. Bei noch laufendem Archivimport oder unvollständiger Suche können Vorhaben fehlen. Dies ist eine gezielte lokale Suche mit KI-Verknüpfung, kein unbegrenzt zuverlässiges Gedächtnis.
+
+Wetterprognosen umfassen bis zu sieben Tage, mit Temperatur, Niederschlag und Wind für 7–19 Uhr. Veraltete Cache-Daten werden gekennzeichnet. Feiertage werden nach Land und, sofern bekannt, Bundesland gefiltert; kommunale Ausnahmen und örtliche Lärmregeln sind nicht vollständig abgedeckt. Ein fehlender Feiertagseintrag ist keine rechtliche Erlaubnis für laute Arbeiten. Die Quellen sind im Belegdialog verlinkt: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0), [Nager.Date](https://nagerholidays.com/).
+
 ## 6. Später aktualisieren – ein Befehl
 
 ```bash

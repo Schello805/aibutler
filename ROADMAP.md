@@ -18,7 +18,7 @@ Ausgangspunkt: die vom Nutzer bestätigte Sammlung [public-apis/public-apis](htt
 | 2 | [Nager.Date](https://github.com/nager/Nager.Date) | Feiertage bei Terminen und Planungen berücksichtigen | Jahresdaten für Land/Region lokal zwischenspeichern; regionale bzw. kommunale Sonderfälle gesondert prüfen. Private Termine bleiben lokal. |
 | 3 | [Frankfurter](https://frankfurter.dev/) | Fremdwährungsbeträge aus Rechnungen mit einem datierten Referenzkurs einordnen | Öffentliche Kurse abrufen und lokal rechnen; keine Rechnung, Händlerdaten oder Beträge hochladen. Referenzkurs von tatsächlicher Kartenabrechnung trennen. |
 
-Noch keine dieser APIs ist integriert oder aktiviert. Wetter und Feiertage sind die vorgeschlagenen ersten beiden Erweiterungen. Verkehr, Warnmeldungen und Energiepreise sind weitere Kandidaten, wenn ein konkreter persönlicher Anwendungsfall feststeht.
+Wetter und Feiertage sind jetzt implementiert und jeweils in den Einstellungen aktivierbar. Die Ortswahl erfolgt pro Gerät über freiwillige Standortfreigabe oder manuelle Suche. Die automatische Regionserkennung nutzt zusätzlich BigDataCloud; die Oberfläche erläutert dessen Standort/IP-Abgleich. Frankfurter bleibt ein Kandidat und ist nicht integriert. Verkehr, Warnmeldungen und Energiepreise sind weitere Kandidaten, wenn ein konkreter persönlicher Anwendungsfall feststeht.
 
 ### Vorgesehene Umsetzung
 

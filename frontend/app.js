@@ -4,6 +4,8 @@ let chatBusy=false;
 let conversationId=null;
 let contextDirty=false;
 let currentUser=null;
+let publicServices={weather:false,holidays:false};
+let manualLocation=null,locationMemory=null;
 let authRevision=0;
 const broadcastAuth=()=>localStorage.setItem('butler-auth-event',Date.now()+'-'+Math.random());
 let bootstrapAccount=false;
@@ -62,7 +64,8 @@ function renderSources(status,sync){
     card.append(heading,node('div','source-card-count',id==='iobroker'?(configured?'Auf Anfrage':'—'):count.toLocaleString('de-DE')),node('span','source-card-label',definition.unit),footer);$('source-grid').append(card);
   }
   $('nav-source-count').textContent=configuredCount;
-  $('chat-source-badge').textContent=configuredCount?configuredCount+' QUELLEN VERBUNDEN':'QUELLEN IN DEN EINSTELLUNGEN VERBINDEN';
+  const totalConfigured=configuredCount+Number(!!status.configured_sources?.weather)+Number(!!status.configured_sources?.holidays);
+  $('chat-source-badge').textContent=totalConfigured?totalConfigured+' QUELLEN VERBUNDEN':'QUELLEN IN DEN EINSTELLUNGEN VERBINDEN';
   const archives=sync.states.filter(state=>state.key.startsWith('mail-archive:'));
   const total=archives.reduce((sum,s)=>sum+(s.total||0),0),indexed=archives.reduce((sum,s)=>sum+(s.indexed||0),0),percent=total?Math.min(100,Math.round(indexed/total*100)):0;
   $('source-progress').value=percent;$('archive-percent').textContent=total?percent+' %':'—';
@@ -149,13 +152,13 @@ function showEvidence(sources,diagnostics=[]) {
   const content=$('evidence-content');content.replaceChildren();
   for(const source of sources) {
     const card=document.createElement('article');card.className='evidence-card';
-    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS'}[source.source]||'KONTEXT';
+    const type=document.createElement('span');type.className='badge';type.textContent={paperless:'PAPERLESS',imap:'E-MAIL',ntfy:'NTFY-EREIGNIS',weather:'WETTER · OPEN-METEO',holidays:'FEIERTAGE · NAGER.DATE'}[source.source]||'KONTEXT';
     const title=document.createElement('h3');title.textContent=source.title;
     const excerpt=document.createElement('div');excerpt.className='evidence-excerpt';excerpt.textContent=source.excerpt||'Kein Textauszug verfügbar.';card.append(type,title);
-    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):'Dokumentdatum: '+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
+    if(source.document_date){const date=document.createElement('p');date.className='hint';date.textContent=source.source==='smart_home'?'Abgefragt: '+new Date(source.document_date).toLocaleString('de-DE',{timeZone:'Europe/Berlin'}):(source.source==='weather'?'Prognosetag: ':source.source==='holidays'?'Datum: ':'Dokumentdatum: ')+String(source.document_date).slice(0,10).split('-').reverse().join('.');card.append(date);}
     card.append(excerpt);
     if(source.url && /^https?:\/\//i.test(source.url)) {
-      const link=document.createElement('a');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Original in Paperless öffnen ↗';card.append(link);
+      const link=document.createElement('a');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent=source.source==='paperless'?'Original in Paperless öffnen ↗':'Datenquelle öffnen ↗';card.append(link);
     }content.append(card);
   }
   if(diagnostics.length) {
@@ -175,6 +178,7 @@ async function refresh() {
   const indexed=archives.reduce((sum,state)=>sum+(state.indexed||0),0);
   $('archive-progress').textContent=archives.length?'E-Mail-Archiv: '+indexed.toLocaleString('de-DE')+' von '+total.toLocaleString('de-DE')+' Nachrichten in '+archives.length+' Ordnern erfasst'+(archives.every(state=>state.complete)?' · vollständig':' · wird weiter eingelesen'):'E-Mail-Archiv: Bestandsaufnahme wird vorbereitet.';
   $('source-counts').textContent=Object.entries(sync.indexed).map(([source,count])=>({imap:'E-Mails',paperless:'Dokumente',ntfy:'ntfy-Ereignisse'}[source]||source)+': '+count.toLocaleString('de-DE')).join(' · ');
+  publicServices={weather:!!status.configured_sources?.weather,holidays:!!status.configured_sources?.holidays};
   renderSources(status,sync);
   renderInitialImport(status,sync);
   $('connection').textContent = status.external_llm ? 'Chat-KI bereit' : 'Lokale Suche';
@@ -206,7 +210,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
-  const revision=++authRevision;connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
+  const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
   for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
@@ -223,6 +227,8 @@ async function showLogin(message=''){
 }
 async function restoreLogin(){
   const revision=authRevision;const session=await api('session');if(revision!==authRevision)return;currentUser=session.user;
+  if(currentUser)$('use-device-location').checked=localStorage.getItem('butler-device-location-'+currentUser.id)==='true';
+  if(currentUser){try{manualLocation=JSON.parse(sessionStorage.getItem('butler-manual-location-'+currentUser.id)||'null');}catch{manualLocation=null;}if(manualLocation&&!$('use-device-location').checked)$('location-status').textContent=manualLocation.label+' · manuell, bis zum Abmelden';}
   if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
   document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
@@ -260,7 +266,10 @@ $('chat-form').onsubmit = async event => {
   bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
   try {
-    const result = await api('chat',{method:'POST',body:JSON.stringify({message,share_external:chatAiEnabled,conversation_id:conversationId})});
+    let deviceLocation=null;
+    if(publicServices.weather||publicServices.holidays){const requirement=await api('chat/location-needed',{method:'POST',body:JSON.stringify({message,conversation_id:conversationId})});if(requirement.needed)deviceLocation=await getDeviceLocation().catch(()=>null);}
+    if(currentUser?.id!==actor)return;
+    const result = await api('chat',{method:'POST',body:JSON.stringify({message,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId})});
     if(currentUser?.id!==actor)return;
     progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
@@ -315,6 +324,36 @@ async function pollStatus(){
 setTimeout(pollStatus,5000);
 
 
+$('use-device-location').checked=false;
+$('use-device-location').onchange=()=>{localStorage.setItem('butler-device-location-'+currentUser.id,String($('use-device-location').checked));manualLocation=null;sessionStorage.removeItem('butler-manual-location-'+currentUser.id);locationMemory=null;$('location-status').textContent=$('use-device-location').checked?'Standort wird nur bei passenden Fragen abgefragt.':'Kein automatischer Gerätestandort.';};
+async function getDeviceLocation(){
+  const revision=authRevision,actor=currentUser?.id;const stillCurrent=()=>revision===authRevision&&actor===currentUser?.id;
+  if(!$('use-device-location').checked)return manualLocation;
+  if(!window.isSecureContext||!navigator.geolocation)throw new Error('Gerätestandort benötigt HTTPS und eine Browserfreigabe.');
+  const position=await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:false,timeout:8000,maximumAge:120000}));
+  if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');
+  const latitude=Math.round(position.coords.latitude*100)/100,longitude=Math.round(position.coords.longitude*100)/100,key=latitude+','+longitude;
+  let location={latitude,longitude,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Berlin',label:'Ungefährer Gerätestandort'};
+  if(publicServices.holidays){
+    if(locationMemory?.key===key&&Date.now()-locationMemory.checked<300000)location={...location,...locationMemory.region};
+    else{
+      try{
+        const params=new URLSearchParams({latitude,longitude,localityLanguage:'de'});
+        const response=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?'+params,{signal:AbortSignal.timeout(8000),credentials:'omit',referrerPolicy:'no-referrer',redirect:'error'});
+        if(!response.ok)throw new Error('Region nicht verfügbar');const data=await response.json();
+        const region={country:/^[A-Z]{2}$/.test(data.countryCode)?data.countryCode:'',subdivision:/^[A-Z]{2}-[A-Z0-9]{1,6}$/.test(data.principalSubdivisionCode)?data.principalSubdivisionCode:'',label:[data.city||data.locality,data.principalSubdivision].filter(Boolean).join(', ').slice(0,100)||'Ungefährer Gerätestandort'};
+        if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');location={...location,...region};locationMemory={key,region,checked:Date.now()};
+      }catch{} // Weather still works; missing region is reported by the backend.
+    }
+  }
+  if(!stillCurrent())throw new Error('Anmeldung wurde gewechselt.');
+  $('location-status').textContent=location.label+' · ungefährer Gerätestandort';return location;
+}
+$('choose-location').onclick=()=>{$('location-dialog').showModal();};
+$('location-current').onclick=async()=>{const revision=authRevision;$('use-device-location').checked=true;sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;try{await getDeviceLocation();if(revision!==authRevision)return;localStorage.setItem('butler-device-location-'+currentUser.id,'true');$('location-dialog').close();}catch(e){if(revision!==authRevision)return;$('use-device-location').checked=false;$('location-results').textContent='Standort nicht verfügbar: '+e.message;}};
+$('location-close').onclick=()=>$('location-dialog').close();
+$('location-search-form').onsubmit=async event=>{event.preventDefault();const revision=authRevision;$('location-results').textContent='Suche …';try{const result=await api('locations/search',{method:'POST',body:JSON.stringify({query:$('location-query').value})});if(revision!==authRevision)return;$('location-results').replaceChildren();for(const location of result.locations){const button=node('button','secondary',location.label);button.type='button';button.onclick=()=>{manualLocation=location;sessionStorage.setItem('butler-manual-location-'+currentUser.id,JSON.stringify(location));$('use-device-location').checked=false;localStorage.setItem('butler-device-location-'+currentUser.id,'false');$('location-status').textContent=location.label+' · manuell, bis zum Abmelden';$('location-dialog').close();};$('location-results').append(button);}if(!result.locations.length)$('location-results').textContent='Kein Ort gefunden.';}catch(e){if(revision===authRevision)$('location-results').textContent=e.message;}};
+
 const services = [
   {id:'llm', title:'KI-Anbieter', icon:'✧', description:'Für Analyse und Antworten. Wähle deinen Anbieter und lade die Modelle mit deinem API-Key.', fields:[
     ['llm_provider','Anbieter','provider'], ['llm_api_key','API-Key','password'], ['llm_model','Modell','model']
@@ -334,6 +373,8 @@ const services = [
     ['iobroker_token','Bearer-Token (optional, statt Passwort)','password'], ['iobroker_patterns','Datenpunkt-Muster (mit Komma getrennt)','textarea'],
     ['iobroker_enabled','Regelmäßig im Hintergrund prüfen','checkbox']
   ]},
+  {id:'weather',title:'Wetter · Open-Meteo',description:'Wetter am Standort des fragenden Geräts. Nur auf passende Fragen, ohne Mail- oder Dokumentinhalte an den Wetterdienst zu senden. Kostenfreie API für private, nichtkommerzielle Nutzung.',fields:[['weather_enabled','Wetterabfragen aktivieren','checkbox']]},
+  {id:'holidays',title:'Feiertage · Nager.Date',description:'Feiertage passend zu Land/Bundesland des fragenden Geräts. Automatische Regionserkennung verwendet nach Standortfreigabe BigDataCloud; alternativ Ort manuell wählen. Kommunale Sonderfälle sind nicht vollständig abgedeckt.',fields:[['holidays_enabled','Feiertagsabfragen aktivieren','checkbox']]},
   {id:'internet', title:'Internet', icon:'◎', description:'Erreichbarkeit prüfen. Dafür sind keine Zugangsdaten nötig.', fields:[]}
 ];
 let connected = false;
@@ -351,7 +392,7 @@ function option(select, value, text) {
 for (const service of services) {
   const card=document.createElement('article');card.className='connection-card';card.id='service-'+service.id;
   const heading=document.createElement('div');heading.className='connection-heading';
-  const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',internet:'arrow'}[service.id]));
+  const icon=document.createElement('span');icon.className='service-icon';icon.append(iconNode({llm:'spark',imap:'mail',paperless:'sources',ntfy:'notification',iobroker:'home',weather:'home',holidays:'history',internet:'arrow'}[service.id]));
   const title=document.createElement('h3');title.textContent=service.title;heading.append(icon,title);card.append(heading);
   const description=document.createElement('p');description.textContent=service.description;card.append(description);
   const fieldset=document.createElement('fieldset');fieldset.id='fields-'+service.id;fieldset.disabled=true;
@@ -397,6 +438,7 @@ for (const service of services) {
   if(service.fields.length) {
     const save=document.createElement('button');save.textContent='Speichern';save.type='button';save.onclick=()=>saveService(service,save);actions.append(save);
   }
+  if(['weather','holidays'].includes(service.id)){const choose=node('button','secondary','Standort für Test wählen');choose.type='button';choose.onclick=()=>$('location-dialog').showModal();actions.append(choose);}
   const test=document.createElement('button');test.textContent=service.id==='internet'?'Erreichbarkeit prüfen':'Verbindung testen';test.className='secondary';test.type='button';test.onclick=()=>testService(service.id,test);actions.append(test);fieldset.append(actions);card.append(fieldset);
   const status=document.createElement('p');status.id='status-'+service.id;status.className='service-status';status.setAttribute('role','status');status.textContent='Gespeicherte Verbindung wird geladen …';card.append(status);
   $('connection-cards').append(card);
@@ -459,7 +501,7 @@ async function testService(id,button) {
   if(savingServices.has(id)) return setServiceStatus(id,'Speichern läuft noch …');
   if(dirtyServices.has(id)) return setServiceStatus(id,'Bitte diese Verbindung zuerst speichern, dann testen.','error');
   button.disabled=true;setServiceStatus(id,'Verbindung wird geprüft …');
-  try { const result=await api('connections/'+id+'/test',{method:'POST'});setServiceStatus(id,result.message,'success'); }
+  try {let location=null;if(['weather','holidays'].includes(id)){location=await getDeviceLocation();if(!location)throw new Error('Bitte im Chat einen Ort wählen oder den Gerätestandort freigeben.');} const result=await api('connections/'+id+(location?'/preview':'/test'),{method:'POST',...(location?{body:JSON.stringify(location)}:{})});setServiceStatus(id,result.message,'success'); }
   catch(e) { setServiceStatus(id,e.message,'error'); }
   finally { button.disabled=false; }
 }

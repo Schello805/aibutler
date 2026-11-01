@@ -43,6 +43,9 @@ def local_plan(question):
     from .retrieval import question_sender,is_purchase_question,is_account_question,STOPWORDS
     sender=question_sender(question)
     recent=bool(re.search(r'zuletzt|letzte|neueste|aktuell|gerade|schon|wann',question,re.I))
+    from .public_data import outdoor_question
+    if outdoor_question(question):
+        return RetrievalPlan(queries=['bauen Garten streichen reparieren','Vorhaben','draußen arbeiten'],sources=['email','paperless'],recent=True)
     if sender:
         return RetrievalPlan(intent='person',sender=sender,queries=[sender],sources=['email'],recent=True)
     if is_purchase_question(question):
@@ -73,5 +76,9 @@ def complete_plan(plan,question):
         import re
         if not any(re.search(r'klingel|türklingel',query,re.I) for query in plan.queries):
             plan.queries=plan.queries[:2]+['Klingel']
+    from .public_data import outdoor_question
+    if outdoor_question(question):
+        plan.sources=list(dict.fromkeys([*plan.sources,'email','paperless']))
+        plan.queries=list(dict.fromkeys([fallback.queries[0],*plan.queries]))[:3]
     plan.recent=plan.recent or fallback.recent
     return plan
