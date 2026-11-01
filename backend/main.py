@@ -40,6 +40,7 @@ class Context(BaseModel):
 class Chat(BaseModel):
     message: str = Field(min_length=1,max_length=4000)
     device_location:DeviceLocation | None=None
+    request_id:str|None=Field(default=None,pattern=r'^[a-f0-9]{32}$')
     share_external: bool = False
     conversation_id: str | None = Field(default=None,pattern=r'^[a-f0-9]{32}$')
 
@@ -310,8 +311,38 @@ def create_app(settings=None):
         if chat_slots.locked():raise HTTPException(429,'Der Butler bearbeitet gerade andere Fragen. Bitte kurz warten.')
         async with chat_slots:yield
 
+    active_chats={}
+    class CancelChat(BaseModel):
+        request_id:str=Field(pattern=r'^[a-f0-9]{32}$')
+
+    @app.post('/api/chat/cancel',dependencies=protected)
+    async def cancel_chat(value:CancelChat,request:Request):
+        job=active_chats.get((user_owner(request),value.request_id))
+        if job is None:return {'cancelled':False}
+        job['cancelled']=True;job['task'].cancel()
+        await asyncio.gather(job['task'],return_exceptions=True)
+        return {'cancelled':True}
+
     @app.post('/api/chat',dependencies=[*protected,Depends(chat_capacity)])
     async def chat(value: Chat,request:Request):
+        key=(user_owner(request),value.request_id or secrets.token_hex(16))
+        if key in active_chats:raise HTTPException(409,'Diese Frage wird bereits bearbeitet.')
+        job={'task':asyncio.create_task(answer_chat(value,request)),'cancelled':False};active_chats[key]=job
+        async def disconnect():
+            while not job['task'].done():
+                if await request.is_disconnected():
+                    job['cancelled']=True;job['task'].cancel();return
+                await asyncio.sleep(.5)
+        monitor=asyncio.create_task(disconnect())
+        try:return await job['task']
+        except asyncio.CancelledError:
+            if job['cancelled']:raise HTTPException(499,'Suche abgebrochen.')
+            raise
+        finally:
+            monitor.cancel();await asyncio.gather(monitor,return_exceptions=True)
+            active_chats.pop(key,None)
+
+    async def answer_chat(value:Chat,request:Request):
         owner_id=user_owner(request)
         previous=store.conversation(value.conversation_id,owner_id) if value.conversation_id else None
         if value.conversation_id and previous is None:raise HTTPException(404,'Gespräch nicht gefunden')

@@ -292,17 +292,33 @@ $('connect').onclick = async () => {
 };
 $('scan').onclick = async () => { $('scan').disabled = true; notice('Quellen werden geprüft …'); try { await api('scan',{method:'POST'}); notice('Prüfung abgeschlossen.'); await refresh(); } catch(e) { notice(e.message); } finally { $('scan').disabled = false; } };
 $('save').onclick = async () => { try { const value = JSON.parse($('context-json').value); if(value.projects.some(p=>!p.name.trim()||p.keywords.length>30||p.keywords.some(k=>k.length<2||k.length>100)))throw new Error('Bitte eine Bezeichnung und höchstens 30 Schlagwörter mit jeweils 2 bis 100 Zeichen eingeben.'); await api('context',{method:'PUT',body:JSON.stringify(value)}); contextDirty=false;notice('Kontext lokal gespeichert.'); } catch(e) { notice(e.message); } };
+// A slow search asks every 20 seconds; continuing keeps the existing request.
+let pendingSearch=null;
+function beginSearchWait(){
+  const controller=new AbortController(),requestId=crypto.randomUUID().replaceAll('-','');
+  const search={controller,requestId,timer:null,finished:false};pendingSearch=search;
+  const arm=()=>{search.timer=setTimeout(()=>{if(!search.finished&&pendingSearch===search&&!$('search-wait-dialog').open)$('search-wait-dialog').showModal();},20000);};
+  search.continue=()=>{if(search.finished)return;$('search-wait-dialog').close();clearTimeout(search.timer);arm();};
+  search.finish=()=>{search.finished=true;clearTimeout(search.timer);if(pendingSearch===search){pendingSearch=null;if($('search-wait-dialog').open)$('search-wait-dialog').close();}};
+  search.cancel=()=>{if(search.finished)return;controller.abort();api('chat/cancel',{method:'POST',body:JSON.stringify({request_id:requestId})}).catch(()=>{});stopVoice();search.finish();};
+  arm();return search;
+}
+$('search-continue').onclick=()=>pendingSearch?.continue();
+$('search-cancel').onclick=()=>pendingSearch?.cancel();
+$('search-wait-dialog').addEventListener('cancel',event=>{event.preventDefault();pendingSearch?.cancel();});
+// End search wait controls.
 $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
   if(chatBusy)return;
   if(!connected||!currentUser)return;const actor=currentUser.id;
   bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;if(voiceConversation)voiceState('thinking');
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
+  const search=beginSearchWait();
   try {
     let deviceLocation=null;
-    if(publicServices.weather||publicServices.holidays){const requirement=await api('chat/location-needed',{method:'POST',body:JSON.stringify({message,conversation_id:conversationId})});if(requirement.needed)deviceLocation=await getDeviceLocation().catch(()=>null);}
+    if(publicServices.weather||publicServices.holidays){const requirement=await api('chat/location-needed',{method:'POST',signal:search.controller.signal,body:JSON.stringify({message,conversation_id:conversationId})});if(requirement.needed)deviceLocation=await getDeviceLocation().catch(()=>null);}
     if(currentUser?.id!==actor)return;
-    const result = await api('chat',{method:'POST',body:JSON.stringify({message,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId})});
+    const result = await api('chat',{method:'POST',signal:search.controller.signal,body:JSON.stringify({message,request_id:search.requestId,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId})});search.finish();
     if(currentUser?.id!==actor)return;
     progress.remove();answerBubble(result);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
@@ -319,7 +335,7 @@ $('chat-form').onsubmit = async event => {
       }else{voiceConversation=false;voiceState('idle','Keine lokale deutsche Stimme verfügbar');}
     }else{voiceConversation=false;voiceState('idle');}
 
-  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();bubble('Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally { if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
+  } catch(e) { if(currentUser?.id!==actor)return;voiceConversation=false;progress.remove();bubble(search.controller.signal.aborted?'Suche abgebrochen.':'Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally {search.finish(); if(currentUser?.id===actor){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
 };
 for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem('butler-'+id)!=='false';

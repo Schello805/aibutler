@@ -2452,3 +2452,5 @@ body[data-view=chat] .notice:empty {display:none;}
 @media(max-width:700px){.keyboard-open .voice-control,.keyboard-open .welcome{display:none}.keyboard-open .voice-options,.keyboard-open .chat-footnote{display:none}}
 
 img.brand-icon,img.auth-brand{object-fit:cover;aspect-ratio:1;height:auto;border:0;padding:0;flex-shrink:0;background:#0b182a;}
+
+#search-wait-dialog{width:min(92vw,440px);border:1px solid #dce5d7;border-radius:18px;padding:24px;color:#354333;background:#fcfdfa}#search-wait-dialog::backdrop{background:#15231d66}#search-wait-dialog h2{font-size:22px;margin:0 0 12px}#search-wait-dialog p{font-size:14px;line-height:1.6}.search-wait-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.search-wait-actions button{min-height:46px}
