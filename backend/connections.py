@@ -199,7 +199,7 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                 if not getattr(s,service+'_enabled'):raise ValueError('Verbindung zuerst aktivieren')
                 start=datetime.now(ZoneInfo('Europe/Berlin')).replace(hour=0,minute=0,second=0,microsecond=0)
                 result=await worker.personal.refresh(kind,start,start+timedelta(days=1),force=True) if kind=='calendar' else await worker.personal.refresh(kind,force=True)
-                if not result or result['stale']:raise ValueError('iCloud nicht lesbar')
+                if not result or result['stale']:raise HTTPException(502,worker.personal.status.get(service,{}).get('error','iCloud-Abruf fehlgeschlagen; bitte erneut versuchen.'))
                 return {'ok':True,'message':'iCloud lesend verbunden · '+str(len(result['records']))+(' Termine im Testzeitraum' if kind=='calendar' else ' Kontakte')+' · Sammlungen: '+', '.join(result['collections'])}
             if service=='llm':
                 # Explicit test sends no personal data and does not enable monitoring.
@@ -234,6 +234,8 @@ def connection_router(s, worker, auth, env_path=Path('.env')):
                     if service=='paperless' and 'results' not in response.json():
                         raise ValueError('Invalid Paperless response')
             return {'ok':True,'message':'Internetzugriff erreichbar (noch keine Websuche).' if service=='internet' else 'Verbindung erfolgreich geprüft.'}
+        except HTTPException:
+            raise
         except Exception as exc:
             # Never include provider exception text: it can contain credentials or URLs.
             code = exc.response.status_code if isinstance(exc,httpx.HTTPStatusError) else None

@@ -19,6 +19,21 @@ from .retrieval import STOPWORDS
 
 D='DAV:';C='urn:ietf:params:xml:ns:caldav';A='urn:ietf:params:xml:ns:carddav'
 
+
+def icloud_error(exc,stage):
+    # Only fixed messages and numeric status codes; never echo provider bodies/URLs.
+    prefix='iCloud · '+stage+': '
+    if isinstance(exc,httpx.HTTPStatusError):
+        code=exc.response.status_code
+        message={401:'Apple lehnt die Anmeldung ab. Apple-Account und app-spezifisches Passwort prüfen.',403:'Apple verweigert den Zugriff auf diese Sammlung.',404:'Die angeforderte iCloud-Sammlung wurde nicht gefunden.',400:'Apple hat die DAV-Abfrage abgelehnt.',429:'Zu viele Abrufe. Bitte kurz warten und erneut testen.'}.get(code,'Apple-Dienst derzeit nicht verfügbar.' if code>=500 else 'Apple hat den Abruf abgelehnt.')
+        return prefix+message+' (HTTP '+str(code)+')'
+    if isinstance(exc,(TimeoutError,httpx.TimeoutException)):return prefix+'Zeitüberschreitung beim Abruf. Bitte erneut versuchen.'
+    if isinstance(exc,httpx.RequestError):return prefix+'Netzwerk- oder TLS-Verbindung zu Apple fehlgeschlagen. DNS und Internetzugang des LXC prüfen.'
+    if isinstance(exc,ValueError) and str(exc) in ('iCloud-Antwort überschreitet das Größenlimit','iCloud-Sammlung ist zu groß','Zu viele iCloud-Einträge im Zeitraum','iCloud-Eintrag ist zu groß'):
+        return prefix+'Die Sammlung überschreitet das unterstützte Größenlimit; bisherige Daten bleiben erhalten.'
+    if stage=='Kontaktformat':return prefix+'Mindestens eine Kontaktkarte konnte nicht gelesen werden. Der bisherige Stand bleibt erhalten.'
+    return prefix+'Die DAV-Antwort konnte nicht vollständig verarbeitet werden. Der bisherige Stand bleibt erhalten.'
+
 class ICloudConfig(BaseModel):
     icloud_calendar_enabled:bool=False
     icloud_calendar_user:str=Field(default='',max_length=254)
@@ -45,7 +60,7 @@ def apple_url(value,base,kind):
 
 class DAV:
     def __init__(self,settings,kind):
-        self.kind=kind;self.root='https://'+('caldav' if kind=='calendar' else 'contacts')+'.icloud.com/'
+        self.stage='Verbindung';self.kind=kind;self.root='https://'+('caldav' if kind=='calendar' else 'contacts')+'.icloud.com/'
         self.user=getattr(settings,'icloud_'+kind+'_user');self.password=getattr(settings,'icloud_'+kind+'_password')
         if not self.user or not self.password:raise ValueError('Apple-Account und app-spezifisches Passwort fehlen')
 
@@ -66,6 +81,7 @@ class DAV:
         raise ValueError('Zu viele iCloud-Weiterleitungen')
 
     async def discover(self,client):
+        self.stage='Anmeldung / Kontosuche'
         body=f'<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>'
         try:tree,base=await self.request(client,'PROPFIND',self.root,body)
         except httpx.HTTPStatusError as exc:
@@ -73,6 +89,7 @@ class DAV:
             tree,base=await self.request(client,'PROPFIND',self.root+'.well-known/'+('caldav' if self.kind=='calendar' else 'carddav'),body)
         principal=tree.find('.//{DAV:}current-user-principal/{DAV:}href')
         if principal is None or not principal.text:raise ValueError('iCloud-Prinzipal fehlt')
+        self.stage='Sammlungssuche'
         namespace=C if self.kind=='calendar' else A
         home='calendar-home-set' if self.kind=='calendar' else 'addressbook-home-set'
         tree,base=await self.request(client,'PROPFIND',apple_url(principal.text,base,self.kind),f'<d:propfind xmlns:d="DAV:" xmlns:x="{namespace}"><d:prop><x:{home}/></d:prop></d:propfind>')
@@ -106,7 +123,11 @@ class DAV:
                 if self.kind=='calendar':
                     stamp=lambda value:value.astimezone(ZoneInfo('UTC')).strftime('%Y%m%dT%H%M%SZ')
                     body=f'<c:calendar-query xmlns:d="DAV:" xmlns:c="{C}"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="{stamp(start)}" end="{stamp(end)}"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>'
-                else:body=f'<a:addressbook-query xmlns:d="DAV:" xmlns:a="{A}"><d:prop><d:getetag/><a:address-data/></d:prop><a:filter/></a:addressbook-query>'
+                else:
+                    # Ask only for fields we use: embedded photos/notes can otherwise exceed limits.
+                    fields=''.join('<a:prop name="'+name+'"/>' for name in ('VERSION','UID','FN','N','EMAIL','TEL','ORG','TITLE','REV','RELATED','X-ABRELATEDNAMES','X-ABLABEL'))
+                    body=f'<a:addressbook-query xmlns:d="DAV:" xmlns:a="{A}"><d:prop><d:getetag/><a:address-data>{fields}</a:address-data></d:prop><a:filter test="anyof"><a:prop-filter name="FN"/><a:prop-filter name="FN"><a:is-not-defined/></a:prop-filter></a:filter></a:addressbook-query>'
+                self.stage='Kalenderabruf' if self.kind=='calendar' else 'Kontaktabruf'
                 tree,base=await self.request(client,'REPORT',collection['url'],body,'1')
                 field='calendar-data' if self.kind=='calendar' else 'address-data';namespace=C if self.kind=='calendar' else A
                 responses=tree.findall('{DAV:}response')
@@ -118,7 +139,10 @@ class DAV:
                     if raw is None:raise ValueError('iCloud liefert unvollständige Einträge')
                     if len(raw)>2*1024*1024:raise ValueError('iCloud-Eintrag ist zu groß')
                     if self.kind=='calendar':result.extend(parse_events(raw,collection,start,end,zone))
-                    else:result.append(parse_contact(raw,account_scope(settings,'contacts')))
+                    else:
+                        self.stage='Kontaktformat'
+                        result.append(parse_contact(raw,account_scope(settings,'contacts')))
+                        self.stage='Kontaktabruf'
                     if len(result)>5000:raise ValueError('Zu viele iCloud-Einträge im Zeitraum')
         unique={row['id']:row for row in result}
         return {'records':list(unique.values()),'collections':[row['name'] for row in collections]}
@@ -203,20 +227,21 @@ class PersonalSources:
                 return {**previous['value'],'checked':previous['checked'],'stale':False}
             key='icloud_'+kind
             if self.retry.get(scope,0)>time.monotonic():
-                self.status[key]={**self.status.get(key,{}),'error':'iCloud-Abruf fehlgeschlagen; erneuter Versuch in Kürze.'}
+                self.status[key]={**self.status.get(key,{}),'error':self.status.get(key,{}).get('error','iCloud-Abruf fehlgeschlagen; erneuter Versuch in Kürze.')}
                 return {**previous['value'],'checked':previous['checked'],'stale':True} if previous else None
             previous_status={'checked':datetime.fromtimestamp(previous['checked'],ZoneInfo('UTC')).isoformat(),'fetched':len(previous['value']['records'])} if previous else {}
             self.status[key]={**previous_status,'running':True}
             try:
-                data=await asyncio.wait_for(DAV(settings,kind).read(settings,start,end,zone),timeout=60)
+                dav=DAV(settings,kind)
+                data=await asyncio.wait_for(dav.read(settings,start,end,zone),timeout=60)
                 if kind=='calendar':data.update(start=start.isoformat(),end=end.isoformat(),zone=zone)
                 self.store.save_dav_snapshot(scope,data)
                 self.retry.pop(scope,None)
                 self.status[key]={'checked':datetime.now(ZoneInfo('UTC')).isoformat(),'fetched':len(data['records']),'running':False}
                 return {**data,'checked':time.time(),'stale':False}
-            except Exception:
+            except Exception as exc:
                 self.retry[scope]=time.monotonic()+60
-                self.status[key]={**previous_status,'error':'iCloud nicht lesbar. Apple-Account, app-spezifisches Passwort und Freigaben prüfen. Alter Stand ist nicht live.','running':False}
+                self.status[key]={**previous_status,'error':icloud_error(exc,dav.stage if 'dav' in locals() else 'Konfiguration'),'running':False}
                 return {**previous['value'],'checked':previous['checked'],'stale':True} if previous else None
 
     async def poll(self):

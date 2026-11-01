@@ -266,3 +266,32 @@ def test_non_dav_success_page_is_not_an_empty_calendar(tmp_path):
             dav=DAV(settings(tmp_path),'calendar')
             with pytest.raises(ValueError,match='DAV-Antwort'):await dav.request(client,'REPORT',dav.root,'<x/>')
     asyncio.run(run())
+
+
+def test_contact_test_exposes_safe_auth_failure_not_provider_details(tmp_path,monkeypatch):
+    secret='private-provider-body-and-password'
+    async def denied(*args,**kwargs):
+        response=httpx.Response(401,text=secret,request=httpx.Request('REPORT','https://contacts.icloud.com/private-path'))
+        raise httpx.HTTPStatusError(secret,request=response.request,response=response)
+    monkeypatch.setattr(DAV,'read',denied)
+    with TestClient(create_app(settings(tmp_path))) as client:
+        response=client.post('/api/connections/icloud_contacts/test',headers={'Authorization':'Bearer test'})
+        assert response.status_code==502
+        assert 'HTTP 401' in response.json()['detail'] and 'Apple lehnt die Anmeldung ab' in response.json()['detail']
+        assert secret not in response.text and 'private-path' not in response.text
+
+
+def test_contacts_request_excludes_embedded_photos_and_notes(tmp_path,monkeypatch):
+    from defusedxml import ElementTree
+    s=settings(tmp_path)
+    async def discover(self,client):return [{'name':'Kontakte','url':'https://contacts.icloud.com/books/'}]
+    async def request(self,client,method,url,body,depth='0'):
+        tree=ElementTree.fromstring(body)
+        fields={node.attrib['name'] for node in tree.findall('.//{urn:ietf:params:xml:ns:carddav}address-data/{urn:ietf:params:xml:ns:carddav}prop')}
+        assert {'UID','FN','EMAIL','TEL','ORG','X-ABLABEL'}<=fields
+        assert not fields&{'PHOTO','NOTE'}
+        return ElementTree.fromstring(multistatus('<a:address-data>'+escape(CONTACT)+'</a:address-data>','/books/person.vcf')),url
+    monkeypatch.setattr(DAV,'discover',discover);monkeypatch.setattr(DAV,'request',request)
+    result=asyncio.run(DAV(s,'contacts').read(s))
+    assert len(result['records'])==1
+    assert 'private-note-not-needed' not in str(result)
