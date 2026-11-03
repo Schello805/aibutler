@@ -22,7 +22,7 @@ function voiceState(state,message){
   $('voice-label').textContent=message||labels[state][0];$('voice-hint').textContent=labels[state][1];$('voice-stop').hidden=state==='idle';
 }
 function setMic(active){if(!active)voiceState('idle');}
-function answerBubble(result){
+function answerBubble(result,preloadAudio=false){
   const text=result.ai_issue&&result.answer.includes('KI-Auswertung einschalten')?'Die passenden Unterlagen sind vorhanden. Die KI-Auswertung ist gerade nicht verfügbar.':result.answer;
   const answer=bubble(text,'assistant',result.answered_at||result.created);if(result.request_id)answer.dataset.requestId=result.request_id;
   if(Number.isFinite(result.duration_seconds)&&result.duration_seconds>=0&&!result.pending){const duration=node('span','message-duration',' · '+result.duration_seconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s');duration.title='Bearbeitungsdauer auf dem Butler-Server';answer.querySelector('.message-meta').append(duration);}
@@ -35,7 +35,7 @@ function answerBubble(result){
   if(result.clarification==='location'){
     const choose=node('button','evidence-link','Ort angeben');choose.type='button';choose.onclick=()=>{$('location-dialog').showModal();};answer.append(choose);
   }
-  if(!result.pending&&!result.interrupted){const listen=node('button','evidence-link','Anhören');listen.type='button';listen.onclick=async()=>{const actor=currentUser?.id;stopVoice(false);try{await window.ButlerSpeech.prime();listen.disabled=true;await window.ButlerSpeech.speak(result.answer);}catch(error){if(currentUser?.id===actor)notice(error.message);}finally{listen.disabled=false;}};answer.append(listen);}
+  if(!result.pending&&!result.interrupted){const listen=node('button','evidence-link','Anhören');listen.type='button';listen.onclick=async()=>{const actor=currentUser?.id,revision=authRevision;stopVoice(false);listen.disabled=true;try{await window.ButlerSpeech.prime();if(currentUser?.id!==actor||revision!==authRevision)return;await window.ButlerSpeech.speak(result.answer,()=>{listen.textContent='Wird vorgelesen …';});}catch(error){if(currentUser?.id===actor)notice(error.message);}finally{listen.disabled=false;listen.textContent='Anhören';}};answer.append(listen);if(preloadAudio&&$('speak').checked&&window.ButlerSpeech?.prepare){const actor=currentUser?.id;listen.textContent='Audio wird vorbereitet …';window.ButlerSpeech.prepare(result.answer).then(()=>{if(currentUser?.id===actor&&listen.isConnected&&!listen.disabled){listen.textContent='Anhören';listen.title='Sprachausgabe ist bereits vorbereitet';}}).catch(()=>{if(currentUser?.id===actor&&listen.isConnected&&!listen.disabled){listen.textContent='Anhören';listen.title='Audio wird beim Antippen erneut vorbereitet';}});}}
   if(result.retrieval_mode==='indexed'&&result.question){const deeper=node('button','evidence-link','Gründlicher recherchieren');deeper.type='button';deeper.onclick=()=>{if(chatBusy)return;researchRequested=true;$('question').value=result.question;$('chat-form').requestSubmit();};answer.append(deeper);}
   if(result.control_choices?.length){const choiceActor=currentUser?.id;const choices=node('div','control-choices');for(const choice of result.control_choices){const choose=node('button','evidence-link',choice.name);choose.type='button';choose.onclick=()=>{if(chatBusy||currentUser?.id!==choiceActor)return;$('question').value=choice.command;$('chat-form').requestSubmit();};choices.append(choose);}answer.append(choices);}
   if(result.control_action)window.ButlerControls?.confirmation(answer,result.control_action);
@@ -272,7 +272,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
-  pendingSearch?.cancel();window.ButlerMemory?.clear();locationQuestion=null;
+  pendingSearch?.cancel();window.ButlerMemory?.clear();window.ButlerSpeech?.clear();locationQuestion=null;
   const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   stopVoice();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
@@ -379,14 +379,14 @@ async function resumeConversationTurn(conversation){
   const search=beginSearchWait('chat',pending.payload.request_id);chatBusy=true;$('send').disabled=true;$('messages').setAttribute('aria-busy','true');
   search.onConnectionIssue=()=>{if(currentUser?.id!==actor||revision!==authRevision)return;const content=placeholder?.querySelector('.bubble-content');if(content)content.textContent='Verbindung unterbrochen · ich warte auf die Rückmeldung des Butlers.';};
   search.onProgress=state=>{if(search.finished||currentUser?.id!==actor||revision!==authRevision||conversationId!==id)return;const content=placeholder?.querySelector('.bubble-content');if(content&&state.progress)content.textContent=state.draft_text||state.progress.label+' · '+Math.round(state.progress.elapsed_seconds)+' s';};
-  try{const result=await chatWithRecovery(search,null);if(currentUser?.id!==actor||revision!==authRevision||conversationId!==id)return;placeholder?.remove();answerBubble(result);}
+  try{const result=await chatWithRecovery(search,null);if(currentUser?.id!==actor||revision!==authRevision||conversationId!==id)return;placeholder?.remove();answerBubble(result,true);}
   catch(error){if(currentUser?.id===actor&&revision===authRevision){const content=placeholder?.querySelector('.bubble-content');if(content)content.textContent=search.controller.signal.aborted?'Suche abgebrochen. Deine Frage bleibt gespeichert.':'Verbindung unterbrochen. Öffne das Gespräch erneut, um den Stand zu laden.';}}
   finally{search.finish();if(currentUser?.id===actor&&revision===authRevision){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');loadConversations().catch(()=>{});}}
 }
 $('chat-form').onsubmit = async event => {
   event.preventDefault(); const message = $('question').value.trim(); if (!message) return;
   if(chatBusy)return;
-  if(!connected||!currentUser)return;if($('speak').checked)try{window.ButlerSpeech?.prime().catch(()=>{});}catch{}const actor=currentUser.id,revision=authRevision;conversationRevision++;
+  if(!connected||!currentUser)return;const actor=currentUser.id,revision=authRevision;conversationRevision++;
   voiceEpoch++;window.ButlerSpeech?.stop();bubble(message,'user'); $('question').value = '';$('question').style.height=''; chatBusy=true;$('send').disabled = true;if(voiceConversation)voiceState('thinking');
   const progress=document.createElement('div');progress.className='chat-progress';progress.textContent='Dein Butler sucht in deinen Quellen …';$('messages').append(progress);$('messages').setAttribute('aria-busy','true');$('messages').scrollTop=$('messages').scrollHeight;
   let draft=null;
@@ -400,20 +400,18 @@ $('chat-form').onsubmit = async event => {
     const research=researchRequested;researchRequested=false;
     const result = await chatWithRecovery(search,{message,research,request_id:search.requestId,device_location:deviceLocation,share_external:chatAiEnabled,conversation_id:conversationId});search.finish();
     if(currentUser?.id!==actor||revision!==authRevision)return;
-    progress.remove();draft?.remove();if(typeof result.preferred_name==='string'){currentUser.preferred_name=result.preferred_name;$('preferred-name').value=result.preferred_name;}answerBubble(result);conversationId=result.conversation_id||conversationId;
+    progress.remove();draft?.remove();if(typeof result.preferred_name==='string'){currentUser.preferred_name=result.preferred_name;$('preferred-name').value=result.preferred_name;}answerBubble(result,true);conversationId=result.conversation_id||conversationId;
     if(conversationId)localStorage.setItem(conversationKey(),conversationId);
     locationQuestion=result.clarification==='location'?{message:result.pending_question||message,actor,conversationId}:null;
     loadConversations().catch(()=>{});
-    if ($('speak').checked) {
-      const turn=voiceEpoch;voiceState('starting','Lokale Stimme wird vorbereitet …');
-      window.ButlerSpeech.speak(result.answer,()=>{if(turn===voiceEpoch)voiceState('speaking');}).then(played=>{if(currentUser?.id!==actor||revision!==authRevision||turn!==voiceEpoch)return;if(played&&voiceConversation&&$('voice-send').checked)startLocalRecording();else{voiceConversation=false;voiceState('idle');}}).catch(error=>{if(currentUser?.id===actor&&revision===authRevision&&turn===voiceEpoch){voiceConversation=false;voiceState('idle',error.message);}});
-    }else{voiceConversation=false;voiceState('idle');}
+    voiceConversation=false;voiceState('idle');
 
   } catch(e) { if(currentUser?.id!==actor||revision!==authRevision)return;voiceConversation=false;progress.remove();draft?.remove();if(!search.controller.signal.aborted&&!$('question').value){$('question').value=message;$('text-entry').open=true;autoSizeQuestion();}bubble(search.controller.signal.aborted?'Suche abgebrochen.':'Die Anfrage konnte nicht abgeschlossen werden: '+e.message,'assistant'); } finally {search.finish(); if(currentUser?.id===actor&&revision===authRevision){chatBusy=false;$('send').disabled=false;$('messages').setAttribute('aria-busy','false');if(!voiceConversation&&$('mic').dataset.state!=='idle')setMic(false);loadConversations().catch(()=>{}); }}
 };
 for(const id of ['speak','voice-send']) {
-  $(id).checked=localStorage.getItem('butler-'+id)!=='false';
-  $(id).onchange=()=>localStorage.setItem('butler-'+id,String($(id).checked));
+  const key=id==='speak'?'butler-prepare-audio':'butler-'+id;
+  $(id).checked=localStorage.getItem(key)!=='false';
+  $(id).onchange=()=>localStorage.setItem(key,String($(id).checked));
 }
 // Voice lifecycle: each capture belongs to one user and one cancellable turn.
 let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null;
