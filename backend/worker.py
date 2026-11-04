@@ -65,16 +65,16 @@ class Worker:
                 return cached[1]
             try:
                 if sender:
-                    result=await asyncio.wait_for(asyncio.to_thread(search_sender_mail,settings,sender,self.store.mail_metadata_ids()),timeout=45)
+                    result=await asyncio.wait_for(asyncio.to_thread(search_sender_mail,settings,sender,await asyncio.to_thread(self.store.mail_metadata_ids)),timeout=45)
                 else:
                     terms=list(dict.fromkeys(word for query in queries or [] for word in re.findall(r'\w{3,}',query)))[:8] if queries else [['heiz','therme'],['wart','service']]
                     from .tax_evidence import tax_id_question
                     if tax_id_question(question):terms=[['Steuer-ID','Identifikationsnummer','Steueridentifikationsnummer','IdNr','Steuer ID']]
                     job=job_start_context(question)
                     if job and job['company']:terms=[[job['company']],['Arbeitsvertrag','Arbeitsbeginn','Arbeitstag','Personalabteilung','Onboarding','Willkommen']]
-                    result=await asyncio.wait_for(asyncio.to_thread(search_mail,settings,terms or [['heiz','therme'],['wart','service']],self.store.mail_ids()),timeout=45)
+                    result=await asyncio.wait_for(asyncio.to_thread(search_mail,settings,terms or [['heiz','therme'],['wart','service']],await asyncio.to_thread(self.store.mail_ids)),timeout=45)
                 for item in result['items']:
-                    self.store.commit_item(item)
+                    await asyncio.to_thread(self.store.commit_item,item)
                 state={'ok':True,'indexed':len(result['items']),'limited':result['limited'],'total':result['total'],'folder':settings.imap_folder,'subject_only':result.get('subject_only',False),'sender_search':bool(sender)}
                 self.mail_search_cache[key]=(time.monotonic(),state)
                 return state
@@ -89,8 +89,8 @@ class Worker:
         try:
             items=await search_paperless(settings,queries)
             for item in items:
-                self.store.set_item_metadata(item)
-                if not self.store.unchanged(item):self.store.commit_item(item)
+                await asyncio.to_thread(self.store.set_item_metadata,item)
+                if not await asyncio.to_thread(self.store.unchanged,item):await asyncio.to_thread(self.store.commit_item,item)
             self.document_search_cache[key]=time.monotonic()
             self.status['sources']['paperless_question']={'fetched':len(items),'errors':0}
         except Exception:
@@ -103,7 +103,7 @@ class Worker:
         try:
             states,inventory=await asyncio.wait_for(relevant_states(settings,queries,cached),timeout=10)
             self.smart_inventory=inventory;self.smart_inventory_key=identity;self.smart_inventory_time=time.monotonic()
-            self.store.record_smart_states(scope(settings),states,utc_now())
+            await asyncio.to_thread(self.store.record_smart_states,scope(settings),states,utc_now())
             return states
         except Exception:
             self.status['sources']['smart_context']={'error':'Zusätzliche Geräte konnten nicht gelesen werden; vorhandene Zustände bleiben verfügbar.'}
@@ -123,7 +123,7 @@ class Worker:
                 self.light_enums=enums;self.light_enums_key=identity;self.light_enums_time=time.monotonic()
             if result.get('fresh'):
                 states=[{'id':state['id'],'name':state['name'],'value':state['value'],'status':'unknown' if state['on'] is None else 'value','source_ts':state['source_ts']} for state in result['lights']]
-                self.store.record_smart_states(scope(settings),states,result['checked'])
+                await asyncio.to_thread(self.store.record_smart_states,scope(settings),states,result['checked'])
             self.status['sources']['lighting']={'checked':result['checked'],'fetched':len(result['lights']),'unknown':sum(state['on'] is None for state in result['lights'])}
             if result.get('error'):self.status['sources']['lighting']['error']=result['error']
             return result
@@ -266,62 +266,64 @@ class Worker:
             return result
 
     async def flush_notifications(self):
-        pending=self.store.pending_notifications()
+        pending=await asyncio.to_thread(self.store.pending_notifications)
         if not pending:
             return
         settings=self.s.model_copy()
         if settings.ntfy_mode=='off' or not settings.ntfy_url:
-            self.store.settle_notifications([event['id'] for event in pending])
+            await asyncio.to_thread(self.store.settle_notifications,[event['id'] for event in pending])
             return
         if settings.ntfy_mode=='important':
             urgent=re.compile(r'mahnung|zahlungsfrist|sicherheitswarnung|security alert|konto.{0,20}gesperrt|letzte.{0,15}frist',re.I)
             skipped=[event['id'] for event in pending if not urgent.search(event['title'])]
-            self.store.settle_notifications(skipped)
+            await asyncio.to_thread(self.store.settle_notifications,skipped)
             pending=[event for event in pending if event['id'] not in set(skipped)]
         if not pending:
             return
-        last=float(self.store.notification_value('last-attempt','0'))
+        last=float(await asyncio.to_thread(self.store.notification_value,'last-attempt','0'))
         if time.time()-last<settings.ntfy_interval_seconds:
             return
         # Persist before sending, so uncertain responses/restarts cannot cause a burst.
-        self.store.set_notification_value('last-attempt',time.time())
+        await asyncio.to_thread(self.store.set_notification_value,'last-attempt',time.time())
         text=f"{len(pending)} {'wichtige neue Vorgänge' if settings.ntfy_mode=='important' else 'neue Fundstücke'} im lokalen Butler. Details in der App."
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 response=await client.post(settings.ntfy_url,content=text.encode(),headers={'Authorization':'Bearer '+settings.ntfy_token} if settings.ntfy_token else {})
                 response.raise_for_status()
-            self.store.settle_notifications([event['id'] for event in pending],sent=True)
+            await asyncio.to_thread(self.store.settle_notifications,[event['id'] for event in pending],sent=True)
         except httpx.HTTPError:
             log.warning('Notification digest failed; retry after configured interval')
 
     async def poll_items(self,name):
-        reader=(lambda:read_paperless(self.s.model_copy())) if name=='paperless' else (lambda:asyncio.to_thread(read_mail,self.s.model_copy(),self.store.mail_ids()))
         progress_key='initial-paperless:'+hashlib.sha256(self.s.paperless_url.rstrip('/').encode()).hexdigest()[:16] if name=='paperless' else None
-        initial_progress=bool(progress_key and not self.store.sync_state(progress_key).get('complete'))
+        initial_progress=bool(progress_key and not (await asyncio.to_thread(self.store.sync_state,progress_key)).get('complete'))
         progress={'source':'paperless','phase':'fetching','indexed':0,'total':None,'complete':False}
         try:
-            if initial_progress:self.store.save_sync_state(progress_key,progress)
-            items=await reader()
+            if initial_progress:await asyncio.to_thread(self.store.save_sync_state,progress_key,dict(progress))
+            if name=='paperless':items=await read_paperless(self.s.model_copy())
+            else:
+                known=await asyncio.to_thread(self.store.mail_ids)
+                items=await asyncio.to_thread(read_mail,self.s.model_copy(),known)
             if initial_progress:
-                progress.update(phase='indexing',total=len(items));self.store.save_sync_state(progress_key,progress)
+                progress.update(phase='indexing',total=len(items));await asyncio.to_thread(self.store.save_sync_state,progress_key,dict(progress))
             errors=0
             baseline_key='baseline:'+name+':'+(items[0]['id'].rsplit(':',1)[0] if items else '')
-            initial=not self.store.notification_value(baseline_key)
+            initial=not await asyncio.to_thread(self.store.notification_value,baseline_key)
             for position,item in enumerate(items,1):
                 try:await self.process(item,notify=not initial)
                 except Exception:
                     errors+=1;log.warning('Item indexing failed (%s); retry next poll',name)
                 if initial_progress:
                     progress.update(indexed=position-errors,errors=errors)
-                    if position%10==0:self.store.save_sync_state(progress_key,progress)
+                    if position%10==0:await asyncio.to_thread(self.store.save_sync_state,progress_key,dict(progress))
                 if position%10==0:await asyncio.sleep(0)
             if initial_progress:
-                progress.update(complete=errors==0,phase='complete' if errors==0 else 'error');self.store.save_sync_state(progress_key,progress)
-            if errors==0:self.store.set_notification_value(baseline_key,'1')
+                progress.update(complete=errors==0,phase='complete' if errors==0 else 'error');await asyncio.to_thread(self.store.save_sync_state,progress_key,dict(progress))
+            if errors==0:await asyncio.to_thread(self.store.set_notification_value,baseline_key,'1')
             self.status['sources'][name]={'fetched':len(items),'errors':errors,'checked':utc_now()}
         except Exception:
             if initial_progress:
-                progress.update(phase='error',error=True);self.store.save_sync_state(progress_key,progress)
+                progress.update(phase='error',error=True);await asyncio.to_thread(self.store.save_sync_state,progress_key,dict(progress))
             self.status['sources'][name]={'error':'Abruf fehlgeschlagen; Konfiguration/Verbindung prüfen'}
             log.warning('Source fetch failed: %s',name)
 

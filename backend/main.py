@@ -155,7 +155,7 @@ def create_app(settings=None):
 
     @app.get('/api/auth/config')
     async def auth_config(request:Request):
-        return {'configured':accounts.count()>0,'bootstrap_local':local_browser(request)}
+        return {'configured':await asyncio.to_thread(accounts.count)>0,'bootstrap_local':local_browser(request)}
 
     @app.post('/api/auth/bootstrap')
     async def bootstrap(value:NewAccount,request:Request):
@@ -180,7 +180,7 @@ def create_app(settings=None):
 
     @app.get('/api/session',dependencies=[Depends(auth)])
     async def session_status(request:Request):
-        return {'authenticated':True,'user':request.state.user}
+        return {'authenticated':True,'user':request.state.user,'external_llm':s.chat_llm_enabled if s.chat_llm_enabled is not None else s.allow_external_llm}
 
     @app.delete('/api/session',dependencies=[Depends(auth)])
     async def logout(request:Request):

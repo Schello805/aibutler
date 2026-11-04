@@ -254,7 +254,7 @@ class PersonalSources:
             start=min(start or today,today-timedelta(days=180))
             end=max(end or today,today+timedelta(days=181))
         async with self.locks[kind]:
-            previous=self.store.dav_snapshot(scope)
+            previous=await asyncio.to_thread(self.store.dav_snapshot,scope)
             key='icloud_'+kind
             current=bool(previous)
             if current and kind=='calendar':
@@ -273,7 +273,7 @@ class PersonalSources:
                 dav=DAV(settings,kind)
                 data=await asyncio.wait_for(dav.read(settings,start,end,zone),timeout=60)
                 if kind=='calendar':data.update(start=start.isoformat(),end=end.isoformat(),zone=zone)
-                self.store.save_dav_snapshot(scope,data)
+                await asyncio.to_thread(self.store.save_dav_snapshot,scope,data)
                 self.retry.pop(scope,None)
                 self.status[key]={'checked':datetime.now(ZoneInfo('UTC')).isoformat(),'fetched':len(data['records']),'running':False,'warning':' · '.join(data.get('warnings',[]))}
                 return {**data,'checked':time.time(),'stale':bool(data.get('partial'))}

@@ -154,7 +154,10 @@ async function readApiResponse(response){
 // End response decoding.
 async function api(path, options = {}) {
   const revision=authRevision;
-  const response = await fetch('/api/' + path, {...options, credentials:'same-origin', headers: {'Content-Type':'application/json'}});
+  const signal=options.signal||((options.method||'GET').toUpperCase()==='GET'?AbortSignal.timeout(10000):undefined);
+  let response;
+  try{response=await fetch('/api/' + path, {...options, signal, credentials:'same-origin', headers: {'Content-Type':'application/json'}});}
+  catch(error){if(error.name==='TimeoutError')throw new Error('Der Butler reagiert auf diese Abfrage seit zehn Sekunden nicht. Bitte erneut versuchen.');throw error;}
   if(response.status===401&&revision===authRevision&&!['session','auth/bootstrap','account/password'].includes(path)&&connected)showLogin('Deine Sitzung ist abgelaufen. Bitte erneut anmelden.');
   return readApiResponse(response).catch(error=>{error.status=response.status;throw error;});
 }
@@ -295,15 +298,22 @@ async function restoreLogin(){
   if(!currentUser)throw new Error('Bitte mit einem Benutzerkonto anmelden.');
   $('preferred-name').value=currentUser.preferred_name||'';document.body.dataset.role=currentUser.role;$('account-identity').textContent=currentUser.email+' · '+(currentUser.role==='admin'?'Administrator':'Mitglied');
   $('login-view').hidden=true;$('app-shell').hidden=false;$('login-password').value='';$('login-password-confirm').value='';notice('');
-  connected=true;if(!$('messages').children.length||$('messages').querySelector('.welcome'))welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
+  connected=true;chatAiEnabled=Boolean(session.external_llm);$('send').disabled=chatBusy;$('connection').textContent=chatAiEnabled?'Chat-KI bereit':'Lokale Suche';if(!$('messages').children.length||$('messages').querySelector('.welcome'))welcome();if(document.body.dataset.view==='knowledge')window.ButlerMemory?.load();
   // Resume the chat without waiting for settings, counters or account administration.
   const remembered=localStorage.getItem(conversationKey());
   if(remembered&&!conversationId&&(!location.hash||location.hash==='#chat'))openConversation(remembered).catch(()=>{});
   refresh().catch(()=>{if(revision===authRevision)notice('Statusübersicht derzeit nicht verfügbar.');});
   const chatTurn=conversationRevision;
   loadConversations().then(rows=>{if(!remembered&&!conversationId&&!chatBusy&&chatTurn===conversationRevision&&revision===authRevision&&(!location.hash||location.hash==='#chat')&&rows?.length)openConversation(rows[0].id);}).catch(()=>{});
+  if(document.body.dataset.view==='settings')loadSettingsView();
+}
+// Settings do not compete with session/chat restoration during a normal reload.
+let settingsLoadedRevision=-1;
+function loadSettingsView(){
+  if(!connected||!currentUser||settingsLoadedRevision===authRevision)return;
+  const revision=authRevision;settingsLoadedRevision=revision;
   if(currentUser.role==='admin'){
-    loadConnections().catch(()=>{if(revision===authRevision)notice('Einstellungen konnten noch nicht geladen werden.');});
+    loadConnections().catch(()=>{if(revision===authRevision){settingsLoadedRevision=-1;notice('Einstellungen konnten noch nicht geladen werden. Bitte erneut öffnen.');}});
     loadAccounts().catch(()=>{});
   }
   loadMyIdentity().catch(()=>{});
@@ -720,6 +730,7 @@ function showView() {
     if(link.dataset.nav===view) link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   }
   document.body.dataset.view=view;
+  if(view==='settings'&&connected)loadSettingsView();
   const context=hash==='context';$('setup').hidden=context;$('context').hidden=!context;
   for(const tab of document.querySelectorAll('[data-settings-tab]')) tab.setAttribute('aria-selected',String(tab.dataset.settingsTab===(context?'context':'connections')));
   const [label,title,subtitle]=viewLabels[view];$('page-label').textContent=label;$('page-title').textContent=title;$('page-subtitle').textContent=subtitle;
