@@ -52,6 +52,10 @@ def local_plan(question):
     from .public_data import outdoor_question
     if outdoor_question(question):
         return RetrievalPlan(queries=['bauen Garten streichen reparieren','Vorhaben','draußen arbeiten'],sources=['email','paperless'],recent=True)
+    from .evidence_quality import topic,employer
+    if topic(question)=='leave':
+        company=employer(question)
+        return RetrievalPlan(queries=[(company+' Urlaub').strip(),(company+' Arbeitsvertrag').strip(),(company+' Nachtrag').strip()],recent=True)
     if energy_price_question(question):
         return RetrievalPlan(queries=['Strom Arbeitspreis Grundpreis','Strom Preisänderung Tarif','Strom Abschlag'],sources=['email','paperless'],recent=True)
     if sender:

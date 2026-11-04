@@ -26,7 +26,8 @@ def compact_payload(payload):
         for row in rows:
             if len(chosen)>=6:break
             if row not in chosen:chosen.append(row)
-        value['sources']=[{**row,'body':excerpt(row.get('body',''),query)} for row in chosen[:8]]
+        if value.get('evidence_review'):chosen=rows[:8]
+        value['sources']=[{**row,'body':(str(row.get('body',''))[:6500 if index<2 else 2000] if row.get('evidence_section') else excerpt(row.get('body',''),query))} for index,row in enumerate(chosen[:8])]
     if isinstance(value.get('conversation'),list):value['conversation']=[{**row,'text':str(row.get('text',''))[:1200]} for row in value['conversation'][-4:]]
     if isinstance(value.get('activity_evidence'),list):value['activity_evidence']=[{**row,'body':excerpt(row.get('body',''),query,1200)} for row in value['activity_evidence'][:3]]
     personal=value.get('personal_live_context')

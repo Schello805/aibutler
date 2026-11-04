@@ -1,0 +1,212 @@
+{
+  "description": "Vollständig erfundene Testbelege; keine tatsächlichen Verträge, Urlaubswerte oder E-Mails des Nutzers.",
+  "as_of": "2026-11-04",
+  "cases": [
+    {
+      "name": "Urlaubsklausel am Vertragsende",
+      "question": "Wie viele Urlaubstage habe ich bei Sielaff?",
+      "documents": [
+        {
+          "id": "contract",
+          "title": "Arbeitsvertrag Sielaff Testperson",
+          "body": "Sielaff Testvertrag für Max Muster. Arbeitsverhältnis beginnt am 01.02.2025.\n",
+          "filler": 500,
+          "tail": "\n§ 12 Erholungsurlaub\nDer jährliche Urlaub beträgt 31 Arbeitstage pro Kalenderjahr. Grundlage ist eine Fünftagewoche. Bei anderer Wochenarbeitszeit erfolgt eine entsprechende Umrechnung.\n",
+          "document_date": "2025-02-01"
+        },
+        {
+          "id": "unrelated",
+          "title": "Arbeitsvertrag Andere Firma",
+          "body": "Der jährliche Urlaubsanspruch beträgt 49 Arbeitstage pro Kalenderjahr.",
+          "document_date": "2026-11-03"
+        },
+        {
+          "id": "ads",
+          "title": "Newsletter Sielaff Jobs Urlaubstage",
+          "body": "Sielaff Arbeitsvertrag Urlaub 55 Tage Jobangebote.",
+          "source": "imap",
+          "document_date": "2026-11-03"
+        }
+      ],
+      "expected": {
+        "primary": "contract",
+        "excluded": [
+          "unrelated",
+          "ads"
+        ],
+        "section_terms": [
+          "31 Arbeitstage",
+          "Fünftagewoche",
+          "Umrechnung"
+        ],
+        "conflicts": false,
+        "answer_terms": [
+          "31"
+        ]
+      }
+    },
+    {
+      "name": "Nachtrag vor neuem Scan und zukünftigem Nachtrag",
+      "question": "Wie viele Urlaubstage habe ich bei Sielaff?",
+      "documents": [
+        {
+          "id": "old_scan",
+          "title": "Sielaff Arbeitsvertrag erneut gescannt",
+          "body": "Arbeitsverhältnis beginnt am 01.02.2020. Der jährliche Urlaubsanspruch beträgt 31 Arbeitstage pro Kalenderjahr. Grundlage: Fünftagewoche.",
+          "document_date": "2026-11-03"
+        },
+        {
+          "id": "current_amendment",
+          "title": "Sielaff Nachtrag zum Arbeitsvertrag",
+          "body": "Nachtrag zum Arbeitsvertrag von Max Muster. Mit Wirkung zum 01.11.2026 wird der jährliche Urlaubsanspruch geändert: 34 Arbeitstage pro Kalenderjahr. Die Fünftagewoche bleibt Grundlage; übrige Vertragsregelungen gelten weiter.",
+          "document_date": "2026-10-15"
+        },
+        {
+          "id": "future_amendment",
+          "title": "Sielaff Nachtrag zum Arbeitsvertrag 2027",
+          "body": "Nachtrag für Max Muster. Mit Wirkung zum 01.01.2027 beträgt der jährliche Urlaubsanspruch 36 Arbeitstage pro Kalenderjahr.",
+          "document_date": "2026-11-04"
+        }
+      ],
+      "expected": {
+        "primary": "current_amendment",
+        "section_terms": [
+          "34 Arbeitstage",
+          "31 Arbeitstage"
+        ],
+        "future": [
+          "future_amendment"
+        ],
+        "conflicts": true,
+        "answer_terms": [
+          "34"
+        ]
+      }
+    },
+    {
+      "name": "Unaufgelöster Widerspruch",
+      "question": "Wie viele Urlaubstage habe ich bei Sielaff?",
+      "documents": [
+        {
+          "id": "contract_a",
+          "title": "Sielaff Arbeitsvertrag A",
+          "body": "Testvertrag: Der jährliche Urlaubsanspruch beträgt 31 Arbeitstage pro Kalenderjahr. Fünftagewoche.",
+          "document_date": "2026-01-01"
+        },
+        {
+          "id": "contract_b",
+          "title": "Sielaff Arbeitsvertrag B",
+          "body": "Testvertrag: Der jährliche Urlaubsanspruch beträgt 34 Arbeitstage pro Kalenderjahr. Fünftagewoche. Eine Zuordnung zu Person und Änderungsstand fehlt.",
+          "document_date": "2026-02-01"
+        }
+      ],
+      "expected": {
+        "conflicts": true,
+        "section_terms": [
+          "31 Arbeitstage",
+          "34 Arbeitstage"
+        ],
+        "answer_terms": [],
+        "answer_must_acknowledge_uncertainty": true
+      }
+    },
+    {
+      "name": "Heizungswartung statt Werbung und alter Rechnung",
+      "question": "Wann war die letzte Wartung der Heizung?",
+      "documents": [
+        {
+          "id": "maintenance_2024",
+          "title": "Heizungswartung 2024",
+          "body": "Wartung durchgeführt am 12.04.2024.",
+          "document_date": "2024-04-15"
+        },
+        {
+          "id": "maintenance_2026",
+          "title": "Solarfocus Service Rechnung Wartung Testbeleg",
+          "body": "Wartung des Pelletkessels.\n",
+          "filler": 450,
+          "tail": "\nLeistungsdatum: Wartung durchgeführt am 12.08.2026. Rechnungsdatum: 20.08.2026.\n",
+          "document_date": "2026-08-20"
+        },
+        {
+          "id": "spam",
+          "title": "Newsletter Heizung Wartung Jobs",
+          "body": "Heizung Wartung Jobs Rabatt.",
+          "source": "imap",
+          "document_date": "2026-11-03"
+        }
+      ],
+      "expected": {
+        "primary": "maintenance_2026",
+        "excluded": [
+          "spam"
+        ],
+        "section_terms": [
+          "12.08.2026"
+        ],
+        "conflicts": false,
+        "answer_terms": [
+          "12.08.2026"
+        ]
+      }
+    },
+    {
+      "name": "Letzte echte Absendernachricht statt Erwähnung und Zitat",
+      "question": "Was wollte Tanja zuletzt von mir?",
+      "documents": [
+        {
+          "id": "sender",
+          "title": "Startseite anpassen",
+          "body": "Hallo Testperson, bitte den grünen Startseitenbanner austauschen.\nAm 01.01.2024 schrieb Testperson:\nBitte alte Rechnung zahlen.",
+          "source": "imap",
+          "sender_name": "Tanja",
+          "sender_address": "tanja@example.invalid",
+          "sent_at": "2026-10-28T09:00:00+00:00",
+          "document_date": "2026-10-28"
+        },
+        {
+          "id": "mention",
+          "title": "Tanja",
+          "body": "Tanja hat den Testvertrag gesehen.",
+          "source": "imap",
+          "sender_name": "Andere Person",
+          "sender_address": "other@example.invalid",
+          "sent_at": "2026-11-03T09:00:00+00:00",
+          "document_date": "2026-11-03"
+        }
+      ],
+      "expected": {
+        "primary": "sender",
+        "excluded": [
+          "mention"
+        ],
+        "section_terms": [
+          "Startseitenbanner"
+        ],
+        "conflicts": false,
+        "answer_terms": [
+          "Banner"
+        ]
+      }
+    },
+    {
+      "name": "Rollo-Befehl statt Dokumentensuche",
+      "question": "Kannst du bitte den Rollo Testzimmer runterfahren, also auf 0%",
+      "control": true,
+      "documents": [
+        {
+          "id": "bathroom",
+          "title": "Rechnung Badezimmer Rollo",
+          "body": "Badezimmer Rechnung Rollo Testzimmer 500 Euro.",
+          "document_date": "2026-11-03"
+        }
+      ],
+      "expected": {
+        "answer_terms": [],
+        "excluded": [
+          "bathroom"
+        ]
+      }
+    }
+  ]
+}

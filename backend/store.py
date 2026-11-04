@@ -246,6 +246,13 @@ class Store:
         with self.connect() as db:
             return {r[0] for r in db.execute("SELECT id FROM items WHERE source='imap'")}
 
+    def full_evidence(self,ids):
+        ids=list(dict.fromkeys(ids))[:16]
+        if not ids:return {}
+        with self.connect() as db:
+            rows=db.execute('SELECT i.id AS item_id,i.title,i.body,i.source,m.document_date FROM items i LEFT JOIN item_metadata m ON m.item_id=i.id WHERE i.id IN ('+','.join('?' for _ in ids)+')',ids)
+            return {row['item_id']:dict(row) for row in rows}
+
     def search(self, query, exclude='', strict=True, source_filter=None,recent=False):
         terms=query_terms(query)
         if not terms:

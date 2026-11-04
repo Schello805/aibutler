@@ -332,7 +332,8 @@ def test_missing_selected_calendar_keeps_readable_events_but_marks_incomplete(tm
     result=asyncio.run(personal.refresh('calendar',START,END))
     assert result['records'] and result['partial'] and result['stale']
     assert 'abfuhrplan' in result['warnings'][0] and 'Familie' in result['warnings'][0]
-    context=asyncio.run(personal.context('Was steht am Montag an?'))
+    # This tests partial calendars, independent of which Monday is next today.
+    context=asyncio.run(personal.context('Was steht am 02.11.2026 an?'))
     assert context['calendar']['incomplete'] and context['calendar']['stale']
     assert context['calendar']['events']
 

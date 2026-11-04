@@ -1,4 +1,5 @@
 import email
+import json
 from email import policy
 from email.utils import parsedate_to_datetime, parseaddr
 from datetime import timezone
@@ -177,3 +178,19 @@ async def paperless_document_text(s,item_id,cache_get,cache_save):
     text=await asyncio.to_thread(ocr_original,bytes(data))
     if text:await asyncio.to_thread(cache_save,item_id,version,text)
     return text,True
+
+
+async def paperless_selected_document(s,item_id):
+    """Read extracted text for one already selected document; never download originals here."""
+    base=s.paperless_url.rstrip('/')+'/'
+    instance=hashlib.sha256(base.encode()).hexdigest()[:12]
+    match=re.fullmatch(r'paperless:'+instance+r':(\d+)',item_id)
+    if not s.paperless_url or not match:raise ValueError('Dokument gehört nicht zur aktuellen Paperless-Verbindung')
+    async with httpx.AsyncClient(timeout=2.5,follow_redirects=False,trust_env=False) as client:
+        async with client.stream('GET',base+'api/documents/'+match[1]+'/',headers={'Authorization':'Token '+s.paperless_token}) as response:
+            response.raise_for_status();data=bytearray()
+            async for part in response.aiter_bytes():
+                data.extend(part)
+                if len(data)>2*1024*1024:raise ValueError('Paperless-Dokumentantwort zu groß')
+    doc=json.loads(data);body=(doc.get('content') or '')[:200000];title=doc.get('title') or ''
+    return {'id':item_id,'title':title,'body':body,'source':'paperless','document_date':doc.get('created') or '','filename':doc.get('original_file_name') or '','version':hashlib.sha256((title+'\n'+body).encode()).hexdigest()}

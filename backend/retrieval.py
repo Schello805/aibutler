@@ -213,6 +213,8 @@ def license_question(question):
 
 
 def relevant_evidence(question,title,body):
+    from .evidence_quality import topic,acceptable
+    if topic(question)=='leave':return acceptable(question,{'title':title,'body':body})
     job=job_start_context(question)
     if job:
         if re.search(r'newsletter|job alert|indeed|weitere.{0,15}jobs|stellenanzeigen|ratgeber',title,re.I):return False
