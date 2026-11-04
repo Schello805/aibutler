@@ -1,31 +1,69 @@
-"""Local-only speech transcription. Model must be installed explicitly beforehand."""
+"""Local transcription with preloaded weights, bounded CPU use and explicit decode profiles."""
 import io
 import os
 from pathlib import Path
 from threading import Lock
+from time import perf_counter
 
 _models={}
 _lock=Lock()
+_model_lock=Lock()
+
+class SpeechBusy(RuntimeError):pass
+
+def is_recognizing():return _lock.locked()
 
 def speech_model_path(data_dir:Path):
     small=data_dir/'models/whisper-small'
     return small if (small/'model.bin').is_file() else data_dir/'models/whisper-base'
 
-def transcribe_audio(audio:bytes,model_path:Path):
-    if not (model_path/'model.bin').is_file():
-        raise RuntimeError('Lokales Sprachmodell fehlt. Einrichtung in README ausführen.')
-    import onnxruntime
-    onnxruntime.disable_telemetry_events()
-    from faster_whisper import WhisperModel
-    from faster_whisper.audio import decode_audio
-    with _lock:
-        path=str(model_path.resolve())
-        model=_models.get(path)
-        if model is None:
-            model=WhisperModel(path,device='cpu',compute_type='int8',cpu_threads=max(1,min(4,os.cpu_count() or 1)),local_files_only=True)
-            _models[path]=model
-        samples=decode_audio(io.BytesIO(audio),sampling_rate=16000)
-        if len(samples)>16000*60:
-            raise ValueError('Bitte höchstens 60 Sekunden aufnehmen.')
-        segments,_=model.transcribe(samples,language='de',vad_filter=True,vad_parameters={'threshold':0.35,'min_silence_duration_ms':1500,'speech_pad_ms':500},beam_size=5,condition_on_previous_text=False)
-        return ' '.join(segment.text.strip() for segment in segments).strip()
+def cpu_threads(cgroup_root=Path('/sys/fs/cgroup')):
+    limits=[4,os.cpu_count() or 1]
+    try:limits.append(len(os.sched_getaffinity(0)))
+    except (AttributeError,OSError):pass
+    try:
+        quota,period=(cgroup_root/'cpu.max').read_text().split()
+        if quota!='max':limits.append(max(1,int(quota)//int(period)))
+    except (OSError,ValueError,ZeroDivisionError):
+        try:
+            quota=int((cgroup_root/'cpu/cpu.cfs_quota_us').read_text());period=int((cgroup_root/'cpu/cpu.cfs_period_us').read_text())
+            if quota>0:limits.append(max(1,quota//period))
+        except (OSError,ValueError,ZeroDivisionError):pass
+    return max(1,min(limits))
+
+def load_model(model_path):
+    if not (model_path/'model.bin').is_file():raise RuntimeError('Lokales Sprachmodell fehlt. Einrichtung in README ausführen.')
+    path=str(model_path.resolve())
+    with _model_lock:
+        if path not in _models:
+            import onnxruntime
+            onnxruntime.disable_telemetry_events()
+            from faster_whisper import WhisperModel
+            _models[path]=WhisperModel(path,device='cpu',compute_type='int8',cpu_threads=cpu_threads(),local_files_only=True)
+        return _models[path]
+
+def warm_model(data_dir):
+    path=speech_model_path(data_dir)
+    if not (path/'model.bin').is_file():return False
+    load_model(path)
+    return True
+
+def transcribe_audio(audio:bytes,model_path:Path,*,mode='fast',metrics=None):
+    if mode not in ('fast','accurate'):raise ValueError('Unbekannter Erkennungsmodus')
+    # A cancelled HTTP request cannot cancel a running native decoder. Do not queue
+    # another native recognition behind it after the async route lock was released.
+    if not _lock.acquire(blocking=False):raise SpeechBusy('Spracherkennung ist gerade beschäftigt')
+    started=perf_counter();timings={}
+    try:
+        begin=perf_counter();model=load_model(model_path);timings['model_load_seconds']=round(perf_counter()-begin,3)
+        from faster_whisper.audio import decode_audio
+        begin=perf_counter();samples=decode_audio(io.BytesIO(audio),sampling_rate=16000);timings['audio_decode_seconds']=round(perf_counter()-begin,3)
+        if len(samples)>16000*60:raise ValueError('Bitte höchstens 60 Sekunden aufnehmen.')
+        begin=perf_counter()
+        options={'beam_size':1,'best_of':1,'temperature':0.0} if mode=='fast' else {'beam_size':5,'best_of':5,'temperature':(0.0,0.2,0.4,0.6,0.8,1.0)}
+        segments,_=model.transcribe(samples,language='de',vad_filter=True,vad_parameters={'threshold':0.35,'min_silence_duration_ms':1500,'speech_pad_ms':500},condition_on_previous_text=False,**options)
+        text=' '.join(segment.text.strip() for segment in segments).strip()
+        timings.update(recognition_seconds=round(perf_counter()-begin,3),total_seconds=round(perf_counter()-started,3),audio_seconds=round(len(samples)/16000,2),mode=mode,cpu_threads=cpu_threads(),model=model_path.name)
+        if metrics is not None:metrics.update(timings)
+        return text
+    finally:_lock.release()

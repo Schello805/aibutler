@@ -702,7 +702,9 @@ def test_account_login_attempt_limit(tmp_path):
 def test_local_speech_endpoint_private_and_limits(tmp_path,monkeypatch):
     import backend.speech as speech
     received=[]
-    def transcribe(audio,path):
+    def transcribe(audio,path,**kwargs):
+        assert kwargs['mode']=='fast'
+        kwargs['metrics'].update(recognition_seconds=.2)
         received.append(audio)
         return 'Wann hat jemand geklingelt?'
     monkeypatch.setattr(speech,'transcribe_audio',transcribe)
@@ -714,7 +716,8 @@ def test_local_speech_endpoint_private_and_limits(tmp_path,monkeypatch):
         assert client.post('/api/speech/transcribe',content=b'',headers=headers).status_code==422
         assert client.post('/api/speech/transcribe',content=b'x'*(4*1024*1024+1),headers=headers).status_code==413
         result=client.post('/api/speech/transcribe',content=b'audio',headers=headers)
-        assert result.json()=={'text':'Wann hat jemand geklingelt?','local':True}
+        assert result.json()['text']=='Wann hat jemand geklingelt?' and result.json()['local']
+        assert result.json()['mode']=='fast' and result.json()['timings']['recognition_seconds']==.2
         assert received==[b'audio']
 
 def test_conversation_history_persists_locally_and_requires_auth(tmp_path):

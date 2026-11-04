@@ -17,6 +17,8 @@ def ready(root):
     return (root/(VOICE+'.onnx')).is_file() and (root/(VOICE+'.onnx.json')).is_file()
 
 def synthesize(text,root):
+    from .speech import is_recognizing
+    if is_recognizing():raise VoiceBusy('Spracherkennung hat gerade Vorrang.')
     if not ready(root):raise RuntimeError('Lokale Stimme fehlt. Bitte aibutler update mit Sprachunterstützung ausführen.')
     if not _lock.acquire(blocking=False):raise VoiceBusy('Sprachausgabe ist gerade beschäftigt.')
     try:

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager, suppress
 import secrets
 import time
-from typing import Annotated
+from typing import Annotated,Literal
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,11 +66,16 @@ def create_app(settings=None):
         await asyncio.to_thread(store.recover_pending_turns)
         task = asyncio.create_task(worker.run()) if s.worker_enabled else None
         archive_task=asyncio.create_task(worker.archive_loop()) if s.worker_enabled and s.imap_archive_enabled else None
+        async def warm_speech():
+            from .speech import warm_model
+            try:await asyncio.to_thread(warm_model,s.data_dir)
+            except Exception:pass # Missing/broken optional weights must not block app startup.
+        speech_warm_task=asyncio.create_task(warm_speech()) if s.speech_enabled else None
         yield
         jobs=[job['task'] for job in list(active_chats.values())]
         for job in jobs:job.cancel()
         if jobs:await asyncio.gather(*jobs,return_exceptions=True)
-        for running in (task,archive_task):
+        for running in (task,archive_task,speech_warm_task):
             if running:
                 running.cancel()
                 with suppress(asyncio.CancelledError):
@@ -880,26 +885,29 @@ def create_app(settings=None):
         return Response(audio,media_type='audio/wav')
 
     @app.post('/api/speech/transcribe',dependencies=[Depends(auth)])
-    async def speech_transcribe(request:Request):
+    async def speech_transcribe(request:Request,x_speech_mode:Literal['fast','accurate']=Header(default='fast')):
         if not s.speech_enabled:raise HTTPException(503,'Lokale Spracherkennung ist in dieser Installation deaktiviert')
         if speech_lock.locked():
             raise HTTPException(429,'Spracherkennung ist gerade beschäftigt')
         if request.headers.get('content-type','').split(';')[0]!='application/octet-stream':
             raise HTTPException(415,'Audio als application/octet-stream senden')
-        chunks=[];size=0
+        upload_started=time.monotonic();chunks=[];size=0
         async for chunk in request.stream():
             size+=len(chunk)
             if size>4*1024*1024:
                 raise HTTPException(413,'Aufnahme ist zu groß (maximal 4 MB)')
             chunks.append(chunk)
         if not size:raise HTTPException(422,'Aufnahme ist leer')
-        from .speech import transcribe_audio,speech_model_path
+        from .speech import transcribe_audio,speech_model_path,SpeechBusy
+        timings={'upload_seconds':round(time.monotonic()-upload_started,3)}
+        if speech_lock.locked():raise HTTPException(429,'Spracherkennung ist gerade beschäftigt. Bitte kurz warten.')
         async with speech_lock:
             try:
-                text=await asyncio.to_thread(transcribe_audio,b''.join(chunks),speech_model_path(s.data_dir))
+                text=await asyncio.to_thread(transcribe_audio,b''.join(chunks),speech_model_path(s.data_dir),mode=x_speech_mode,metrics=timings)
+            except SpeechBusy:raise HTTPException(429,'Spracherkennung ist noch beschäftigt. Bitte kurz warten.')
             except RuntimeError as exc:raise HTTPException(503,str(exc))
             except Exception:raise HTTPException(422,'Aufnahme konnte lokal nicht erkannt werden')
-        return {'text':text,'local':True}
+        return {'text':text,'local':True,'timings':timings,'mode':x_speech_mode}
 
     @app.post('/api/webhooks/messenger')
     async def messenger(request: Request, x_webhook_secret: str = Header(default='')):

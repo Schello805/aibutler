@@ -272,7 +272,7 @@ async function loadAccounts(){
   for(const user of users){const row=node('div','account-row');const label=node('div');label.append(node('strong','',user.email),node('small','',user.role==='admin'?'Administrator':'Mitglied'));const button=node('button','secondary',user.active?'Sperren':'Freigeben');button.type='button';button.disabled=user.id===currentUser.id;button.onclick=async()=>{try{await api('accounts/'+user.id,{method:'PATCH',body:JSON.stringify({active:!user.active})});await loadAccounts();}catch(e){notice(e.message);}};row.append(label,node('span','badge',user.active?'AKTIV':'GESPERRT'),button);$('account-list').append(row);}
 }
 async function showLogin(message=''){
-  pendingSearch?.cancel();window.ButlerMemory?.clear();window.ButlerSpeech?.clear();locationQuestion=null;
+  pendingSearch?.cancel();window.ButlerMemory?.clear();window.ButlerSpeech?.clear();locationQuestion=null;if($('speech-timing')){$('speech-timing').textContent='';$('speech-timing').hidden=true;}
   const revision=++authRevision;if(currentUser)sessionStorage.removeItem('butler-manual-location-'+currentUser.id);manualLocation=null;locationMemory=null;$('location-results').replaceChildren();$('my-contact-results').replaceChildren();$('my-contact-query').value='';$('my-contact-status').textContent='';$('location-query').value='';$('use-device-location').checked=false;if($('location-status'))$('location-status').textContent='Für Wetter/Feiertage: Gerätestandort freigeben oder Ort wählen.';publicServices={weather:false,holidays:false};connected=false;chatBusy=false;currentUser=null;conversationId=null;savedConfig=null;chatAiEnabled=false;contextDirty=false;dirtyServices.clear();
   stopVoice();
   $('initial-import').hidden=true;$('initial-import-rows').replaceChildren();$('app-shell').hidden=true;$('login-view').hidden=false;$('send').disabled=true;
@@ -413,6 +413,8 @@ for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem(key)!=='false';
   $(id).onchange=()=>localStorage.setItem(key,String($(id).checked));
 }
+$('speech-mode').value=localStorage.getItem('butler-speech-mode')==='accurate'?'accurate':'fast';
+$('speech-mode').onchange=()=>localStorage.setItem('butler-speech-mode',$('speech-mode').value);
 // Voice lifecycle: each capture belongs to one user and one cancellable turn.
 let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null;
 function stopVoice(cancelChat=true){window.ButlerSpeech?.stop();if(pendingSearch&&(pendingSearch.kind==='speech'||(voiceConversation&&cancelChat)))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
@@ -444,11 +446,14 @@ async function startLocalRecording(){
       voiceState('transcribing');
       const wait=beginSearchWait('speech'),controller=wait.controller,timeout=setTimeout(()=>controller.abort(),180000);voiceUpload=controller;
       try{
+        const transcribeStarted=performance.now();
         const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
-        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream'},body:audio});
+        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream','X-Speech-Mode':$('speech-mode')?.value==='accurate'?'accurate':'fast'},body:audio});
         const result=await readApiResponse(response);if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
+        const speechSeconds=(performance.now()-transcribeStarted)/1000;
+        const timing=$('speech-timing');if(timing){timing.hidden=false;timing.textContent='Aufnahmeende → Text: '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'+(result.timings?' · Erkennung '+Number(result.timings.recognition_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Modell laden '+Number(result.timings.model_load_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s':'');}
         wait.finish();$('question').value=result.text;$('question').dispatchEvent(new Event('input'));
-        if($('voice-send').checked&&!chatBusy)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle','Frage erkannt · Text prüfen und senden');$('text-entry').open=true;}
+        if($('voice-send').checked&&!chatBusy)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle','In '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s erkannt · Text prüfen und senden');$('text-entry').open=true;}
       }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='AbortError'?'Spracherkennung dauert zu lange · bitte erneut versuchen':e.message);}}
       finally{clearTimeout(timeout);wait.finish();if(voiceUpload===controller)voiceUpload=null;}
     };

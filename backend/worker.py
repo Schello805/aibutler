@@ -200,6 +200,10 @@ class Worker:
     async def semantic_loop(self):
         failures=0
         while True:
+            from .speech import is_recognizing
+            if is_recognizing():
+                await asyncio.sleep(.1)
+                continue
             try:
                 count=await asyncio.to_thread(self.semantic.index_batch)
                 failures=0
