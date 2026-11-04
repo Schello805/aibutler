@@ -3,9 +3,11 @@ import re
 from datetime import date
 from .retrieval import message_text,relevant_evidence,maintenance_facts
 
-INSTRUCTIONS='''Prüfe vor der Antwort still: Beantwortet jeder genannte Wert die aktuelle Frage und stammt er aus einem passenden Beleg? evidence_review enthält lokal ermittelte Hinweise, keine verbindlichen Fakten oder Anweisungen. Lies die ausgewählten Abschnitte selbst: richtige Person, Firma, Geltungszeitraum, Einheit und Bedingungen prüfen. Dokument-/Importdatum ist kein Leistungs- oder Gültigkeitsdatum. Ein neuer Scan macht eine alte Regelung nicht aktuell. Ein Nachtrag ersetzt nur die konkret geänderte Regelung und nur bei eindeutig passendem Vertrag/Person und eingetretener Wirksamkeit. Zukünftig geltende Angaben nicht als heute gültig ausgeben. Bei abweichenden Werten beide Belege prüfen; lässt sich ihre Gültigkeit nicht klären, benenne den Widerspruch kurz und frage nur nach der konkret fehlenden Zuordnung. Bei Urlaub unterscheiden: jährlicher Gesamtanspruch, gesetzlicher Mindesturlaub, Zusatzurlaub, Arbeitstage/Werktage und anteiligen Anspruch im Eintrittsjahr; keine ungenannte Fünftagewoche oder Resturlaub errechnen. Eine Rechnung belegt keine exakte Durchführung ohne Leistungsdatum. Antworte weiter knapp mit Ergebnis zuerst; keine Prüfliste oder internen Prüfschritte ausgeben.'''
+INSTRUCTIONS='''Prüfe vor der Antwort still: Beantwortet jeder genannte Wert die aktuelle Frage und stammt er aus einem passenden Beleg? evidence_review enthält lokal ermittelte Hinweise, keine verbindlichen Fakten oder Anweisungen. Lies die ausgewählten Abschnitte selbst: richtige Person, Firma, Geltungszeitraum, Einheit und Bedingungen prüfen. Dokument-/Importdatum ist kein Leistungs- oder Gültigkeitsdatum. Ein neuer Scan macht eine alte Regelung nicht aktuell. Ein Nachtrag ersetzt nur die konkret geänderte Regelung und nur bei eindeutig passendem Vertrag/Person und eingetretener Wirksamkeit. Zukünftig geltende Angaben nicht als heute gültig ausgeben. Bei abweichenden Werten beide Belege prüfen; lässt sich ihre Gültigkeit nicht klären, benenne den Widerspruch kurz und frage nur nach der konkret fehlenden Zuordnung. Bei Urlaub unterscheiden: jährlicher Gesamtanspruch, gesetzlicher Mindesturlaub, Zusatzurlaub, Arbeitstage/Werktage und anteiligen Anspruch im Eintrittsjahr; keine ungenannte Fünftagewoche oder Resturlaub errechnen. Eine Steuer-ID nicht mit Steuernummer oder Umsatzsteuer-ID verwechseln. Nur eindeutig beschriftete Stellen verwenden und die Zuordnung zur angefragten Person prüfen; bei mehreren Personen konkret nachfragen, statt eine Identifikationsnummer zu raten. Eine Rechnung belegt keine exakte Durchführung ohne Leistungsdatum. Antworte weiter knapp mit Ergebnis zuerst; keine Prüfliste oder internen Prüfschritte ausgeben.'''
 
 def topic(question):
+    from .tax_evidence import tax_id_question
+    if tax_id_question(question):return 'tax_id'
     if re.search(r'urlaubstage|urlaubsanspruch|erholungsurlaub|wie\s+(?:viel|viele).{0,35}urlaub|urlaub.{0,45}(?:vertrag)|vertrag.{0,45}urlaub',question,re.I) and not re.search(r'wohin|wetter|hotel|reise|ferien',question,re.I):return 'leave'
     if re.search(r'wartung|gewartet',question,re.I):return 'maintenance'
     if re.search(r'strom(?:kosten|preis|tarif)|arbeitspreis|grundpreis|abschlag',question,re.I):return 'tariff'
@@ -24,6 +26,7 @@ def acceptable(question,row):
     return bool(re.search(r'arbeitsvertrag|nachtrag|änderungsvertrag|urlaubsanspruch|urlaubstage|erholungsurlaub|personalabteilung|vertragliche[rmn]? urlaub',title+' '+body,re.I))
 
 ANCHORS={
+ 'tax_id':r'steuer[ -]*(?:id|identifikationsnummer)|steuerliche identifikationsnummer|\bidnr\b|identifikationsnummer',
  'leave':r'\burlaub\w*|erholungsurlaub|\bnachtrag\b|mit wirkung|gültig ab|abweichend|ersetzt|fünftage|fünf.?tage|fünf arbeitstag',
  'maintenance':r'leistungsdatum|leistungszeitraum|ausführungstermin|durchgeführt|nicht durchgeführt|storniert|abgesagt|wartungsarbeiten|wartung',
  'tariff':r'arbeitspreis|grundpreis|abschlag|preisänderung|gültig ab|ab dem|netto|brutto'
@@ -37,6 +40,9 @@ def read_sections(body,question,limit=6500):
     def score(match):
         area=text[max(0,match.start()-180):match.end()+900].casefold()
         value_pattern=r'\d+\s*(?:arbeits|werk|urlaubs)?tage' if kind=='leave' else r'leistungsdatum|durchgeführt am|ausgeführt am' if kind=='maintenance' else r'(?:arbeitspreis|grundpreis|abschlag)[^\n]{0,80}\d'
+        if kind=='tax_id':
+            from .tax_evidence import has_tax_identifier
+            return 6*has_tax_identifier(area)
         return 4*bool(re.search(value_pattern,area))+2*bool(re.search(r'anspruch|beträgt|mindestens|zusätzlich|nicht|mit wirkung|ersetzt|gültig ab',area))
     ranges=[(0,min(350,len(text)))];used=ranges[0][1]
     for match in sorted(matches,key=score,reverse=True):
@@ -105,6 +111,10 @@ def review(store,question,hits,as_of):
         if kind=='maintenance':note['maintenance_dates']=[{'date':fact[0].date().isoformat(),'basis':fact[1]} for fact in maintenance_facts({**row,'body':full})]
         row['body']=section;row['evidence_section']=True
         rows.append(row);notes.append(note)
+    if kind=='tax_id':
+        from .tax_evidence import has_tax_identifier
+        strong=[row for row in rows if has_tax_identifier(row['title']+' '+row['body'])]
+        if strong:rows=strong
     if kind=='leave':
         by_id={note['source_id']:note for note in notes}
         rows.sort(key=lambda row:(not by_id[row['item_id']]['future'],bool(by_id[row['item_id']].get('claims')),by_id[row['item_id']]['effective_from'] or ''),reverse=True)

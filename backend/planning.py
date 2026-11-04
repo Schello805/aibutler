@@ -49,6 +49,8 @@ def local_plan(question):
     from .retrieval import question_sender,is_purchase_question,is_account_question,STOPWORDS
     sender=question_sender(question)
     recent=bool(re.search(r'zuletzt|letzte|neueste|aktuell|gerade|schon|wann',question,re.I))
+    from .tax_evidence import tax_id_question
+    if tax_id_question(question):return RetrievalPlan(queries=['Steuer-ID','Identifikationsnummer','Steueridentifikationsnummer IdNr'],sources=['email','paperless'])
     from .public_data import outdoor_question
     if outdoor_question(question):
         return RetrievalPlan(queries=['bauen Garten streichen reparieren','Vorhaben','draußen arbeiten'],sources=['email','paperless'],recent=True)

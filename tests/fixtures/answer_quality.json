@@ -207,6 +207,46 @@
           "bathroom"
         ]
       }
+    },
+    {
+      "name": "Steuer-ID beim ersten Versuch statt Nummer nachreichen",
+      "question": "Wie lautet meine Steuer-ID?",
+      "documents": [
+        {
+          "id": "tax_letter",
+          "title": "Bundeszentralamt für Steuern Testperson",
+          "body": "Erfundener Testbeleg.\n",
+          "filler": 450,
+          "tail": "\nIhre steuerliche Identifikationsnummer: 98 765 432 109. Nur erfundene Testdaten.",
+          "document_date": "2020-01-01"
+        },
+        {
+          "id": "weak",
+          "title": "Steuer-ID Identifikationsnummer nachreichen",
+          "body": "Bitte teilen Sie Ihre steuerliche Identifikationsnummer mit. Dieses Schreiben enthält keine Nummer.",
+          "document_date": "2026-11-03"
+        },
+        {
+          "id": "bathroom",
+          "title": "Rechnung Badezimmer",
+          "body": "USt-IdNr.: DE999999999",
+          "document_date": "2026-11-03"
+        }
+      ],
+      "expected": {
+        "primary": "tax_letter",
+        "excluded": [
+          "weak",
+          "bathroom"
+        ],
+        "section_terms": [
+          "98 765 432 109"
+        ],
+        "conflicts": false,
+        "answer_terms": [
+          "98"
+        ]
+      }
     }
   ]
 }

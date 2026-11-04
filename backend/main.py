@@ -563,7 +563,8 @@ def create_app(settings=None):
         plan=route['plan'] if route and route['kind']=='sources' else None
         quick=local_plan(value.message)
         from .evidence_quality import topic as evidence_topic,review as review_evidence,INSTRUCTIONS as EVIDENCE_INSTRUCTIONS
-        if plan is None and evidence_topic(value.message)=='leave':plan=quick
+        if plan is None and evidence_topic(value.message) in ('leave','tax_id'):plan=quick
+        from .tax_evidence import tax_id_question,has_tax_identifier
         if plan is None and (quick.intent in ('person','purchases','account','events') or energy_price_question(value.message)) and len(value.message.split())<=18 and not re.search(r'\bund\b|vergleich|zusammenhang|kalender|wetter|dokument|rechnung',value.message,re.I):
             plan=quick
         if plan is None and not value.research:
@@ -609,9 +610,10 @@ def create_app(settings=None):
                 rows=await asyncio.to_thread(store.search,query,strict=False,source_filter=allowed,recent=plan.recent)
                 for row in rows:
                     body=(row['title']+' '+row['body']).casefold()
-                    if row['item_id'] not in seen_cache and (sum(term in body for term in terms)>=2 or license_question(value.message)) and relevant_evidence(value.message,row['title'],row['body']):
+                    if row['item_id'] not in seen_cache and (sum(term in body for term in terms)>=2 or license_question(value.message) or (tax_id_question(value.message) and has_tax_identifier(body))) and relevant_evidence(value.message,row['title'],row['body']):
                         seen_cache.add(row['item_id']);cached_hits.append(row)
             cached_hits.sort(key=evidence_recency,reverse=True)
+            if tax_id_question(value.message):cached_hits.sort(key=lambda row:has_tax_identifier(row['title']+' '+row['body']),reverse=True)
             groups={}
             for row in cached_hits:groups.setdefault(row.get('source'),[]).append(row)
             cached_hits=[group[index] for index in range(16 if evidence_topic(value.message)=='leave' else 8) for group in groups.values() if index<len(group)][:16 if evidence_topic(value.message)=='leave' else 8]
@@ -621,6 +623,7 @@ def create_app(settings=None):
                 if row['item_id'] not in {hit['item_id'] for hit in cached_hits}:cached_hits.append(row)
         cached_hits=[hit for hit in cached_hits if relevant_evidence(value.message,hit['title'],hit['body']) and (plan.intent!='purchases' or purchase_evidence(hit))]
         indexed_fast=bool(cached_hits) and not value.research
+        if tax_id_question(value.message) and not any(has_tax_identifier(hit['title']+' '+hit['body']) for hit in cached_hits):indexed_fast=False
         if route and route.get('job_context') and not {'imap','paperless'}<={hit.get('source') for hit in cached_hits}:indexed_fast=False
         stage('sources','Lokale Belege werden verwendet' if indexed_fast else 'Ich recherchiere gezielt in den benötigten Diensten')
         personal_task=asyncio.create_task(worker.personal.context(value.message,sender or '',store.personal_identity(user_owner(request)),display_zone,selected)) if not indexed_fast and (selected.intersection({'calendar','contacts'}) or (plan.intent=='person' and sender) or not route) else asyncio.create_task(asyncio.sleep(0,result={'sources':[],'diagnostics':[]}))

@@ -68,6 +68,8 @@ class Worker:
                     result=await asyncio.wait_for(asyncio.to_thread(search_sender_mail,settings,sender,self.store.mail_metadata_ids()),timeout=45)
                 else:
                     terms=list(dict.fromkeys(word for query in queries or [] for word in re.findall(r'\w{3,}',query)))[:8] if queries else [['heiz','therme'],['wart','service']]
+                    from .tax_evidence import tax_id_question
+                    if tax_id_question(question):terms=[['Steuer-ID','Identifikationsnummer','Steueridentifikationsnummer','IdNr','Steuer ID']]
                     job=job_start_context(question)
                     if job and job['company']:terms=[[job['company']],['Arbeitsvertrag','Arbeitsbeginn','Arbeitstag','Personalabteilung','Onboarding','Willkommen']]
                     result=await asyncio.wait_for(asyncio.to_thread(search_mail,settings,terms or [['heiz','therme'],['wart','service']],self.store.mail_ids()),timeout=45)

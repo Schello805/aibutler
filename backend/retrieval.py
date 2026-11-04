@@ -146,7 +146,10 @@ def sender_answer(name,hits):
 
 def query_terms(query):
     words=list(dict.fromkeys(w for w in re.findall(r'\w{3,}',query.lower()) if w not in STOPWORDS))[:24]
-    expressions=[]
+    from .tax_evidence import tax_id_question,FTS
+    tax=tax_id_question(query)
+    if tax:words=[word for word in words if word not in {'steuer','id','steuerliche','steueridentifikationsnummer','identifikationsnummer','idnr','steuerid'}]
+    expressions=[FTS] if tax else []
     for word in words:
         if word.startswith(('heizung','heizungs')):
             expressions.append('("heiz"* OR "solarfocus"* OR "pellet"* OR "therme"* OR "wärmepumpe"*)')
@@ -187,6 +190,12 @@ def evidence_excerpt(body,query,matched=''):
             start=max(0,match.start()-150);snippets.append(text[start:start+650]);ends.append(start+650)
             if len(snippets)>=5:break
         return '\n[… relevanter Abschnitt …]\n'.join(snippets)
+    from .tax_evidence import tax_id_question,tax_label
+    if tax_id_question(query) and len(text)>10000:
+        label=tax_label(text)
+        if label:
+            start=max(0,label.start()-400)
+            return text[:350]+'\n[… Steuer-ID-Abschnitt …]\n'+text[start:start+2500]
     if len(text)<=10000:return text
     position=text.find(message_text(matched).strip()[:100]) if matched else 0
     if re.search(r'wartung|service|gewartet',query,re.I):
@@ -213,6 +222,8 @@ def license_question(question):
 
 
 def relevant_evidence(question,title,body):
+    from .tax_evidence import tax_id_question,tax_relevant
+    if tax_id_question(question):return tax_relevant(title,body)
     from .evidence_quality import topic,acceptable
     if topic(question)=='leave':return acceptable(question,{'title':title,'body':body})
     job=job_start_context(question)
