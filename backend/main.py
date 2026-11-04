@@ -894,7 +894,7 @@ def create_app(settings=None):
         return Response(audio,media_type='audio/wav')
 
     @app.post('/api/speech/transcribe',dependencies=[Depends(auth)])
-    async def speech_transcribe(request:Request,x_speech_mode:Literal['fast','accurate']=Header(default='fast')):
+    async def speech_transcribe(request:Request,x_speech_mode:Literal['fast','balanced','accurate']=Header(default='balanced')):
         if not s.speech_enabled:raise HTTPException(503,'Lokale Spracherkennung ist in dieser Installation deaktiviert')
         if speech_lock.locked():
             raise HTTPException(429,'Spracherkennung ist gerade beschäftigt')
@@ -916,7 +916,7 @@ def create_app(settings=None):
             except SpeechBusy:raise HTTPException(429,'Spracherkennung ist noch beschäftigt. Bitte kurz warten.')
             except RuntimeError as exc:raise HTTPException(503,str(exc))
             except Exception:raise HTTPException(422,'Aufnahme konnte lokal nicht erkannt werden')
-        return {'text':text,'local':True,'timings':timings,'mode':x_speech_mode}
+        return {'text':text,'local':True,'timings':timings,'mode':x_speech_mode,'needs_review':bool(timings.get('needs_review',False))}
 
     @app.post('/api/webhooks/messenger')
     async def messenger(request: Request, x_webhook_secret: str = Header(default='')):

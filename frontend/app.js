@@ -16,7 +16,7 @@ const iconNode=name=>{const el=document.createElementNS('http://www.w3.org/2000/
 const node=(tag,className,text)=>{const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;};
 function welcome(){ $('messages').replaceChildren($('welcome-template').content.cloneNode(true));if(currentUser?.preferred_name)$('messages').querySelector('h1').textContent='Hallo '+currentUser.preferred_name+'. Was möchtest du wissen?'; }
 function voiceState(state,message){
-  const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','3,5 Sekunden Sprechpause oder erneut tippen zum Senden'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
+  const labels={idle:['Sprich mit deinem Butler','Tippen und deine Frage stellen'],starting:['Mikrofon wird vorbereitet …','Mikrofonzugriff bitte erlauben'],recording:['Ich höre zu','Kurze Sprechpause oder erneut tippen zum Senden · Pause unter Sprache & Optionen einstellbar'],transcribing:['Deine Frage wird erkannt …','Spracherkennung auf deinem Butler-Rechner'],thinking:['Ich suche für dich …','Einen Moment bitte'],speaking:['Dein Butler antwortet','Du kannst die Wiedergabe jederzeit beenden']};
   $('mic').dataset.state=state;$('mic').classList.toggle('recording',state==='recording');$('mic').setAttribute('aria-pressed',String(state!=='idle'));$('mic').setAttribute('aria-label',state==='recording'?'Frage jetzt senden':state==='idle'?'Sprachgespräch starten':'Sprachgespräch beenden');
   $('mic').replaceChildren(state==='recording'?node('span','','■'):iconNode('mic'));
   $('voice-label').textContent=message||labels[state][0];$('voice-hint').textContent=labels[state][1];$('voice-stop').hidden=state==='idle';
@@ -413,7 +413,9 @@ for(const id of ['speak','voice-send']) {
   $(id).checked=localStorage.getItem(key)!=='false';
   $(id).onchange=()=>localStorage.setItem(key,String($(id).checked));
 }
-$('speech-mode').value=localStorage.getItem('butler-speech-mode')==='accurate'?'accurate':'fast';
+$('speech-mode').value=['fast','accurate','balanced'].includes(localStorage.getItem('butler-speech-mode'))?localStorage.getItem('butler-speech-mode'):'balanced';
+$('speech-pause').value=['1300','2000','3500'].includes(localStorage.getItem('butler-speech-pause'))?localStorage.getItem('butler-speech-pause'):'1300';
+$('speech-pause').onchange=()=>localStorage.setItem('butler-speech-pause',$('speech-pause').value);
 $('speech-mode').onchange=()=>localStorage.setItem('butler-speech-mode',$('speech-mode').value);
 // Voice lifecycle: each capture belongs to one user and one cancellable turn.
 let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null;
@@ -430,30 +432,32 @@ async function startLocalRecording(){
     context=new (window.AudioContext||window.webkitAudioContext)();
     let resumeTimer;try{await Promise.race([context.resume(),new Promise((_,reject)=>{resumeTimer=setTimeout(()=>reject(new Error('Mikrofon bitte erneut antippen, um Audio zu aktivieren.')),5000);})]);}finally{clearTimeout(resumeTimer);}
     const status=await api('speech');if(!current())return;if(!status.ready)throw new Error('Lokale Spracherkennung ist noch nicht eingerichtet.');
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});if(!current())return;
+    stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:{ideal:1},echoCancellation:true,noiseSuppression:true,autoGainControl:true}});if(!current())return;
     const source=context.createMediaStreamSource(stream),analyser=context.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
     const samples=new Float32Array(analyser.fftSize),parts=[];
     const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
-    recording=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);recorder=recording;
+    recording=new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:128000});recorder=recording;
     let heard=false,lastVoice=performance.now();const started=lastVoice;
+    const pauseValue=Number($('speech-pause')?.value),pauseMs=[1300,2000,3500].includes(pauseValue)?pauseValue:1300;
     const finish=()=>{if(recording.state==='recording')recording.stop();};
-    timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.008){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>3500)||(!heard&&performance.now()-started>12000)||performance.now()-started>59000)finish();},150);
+    timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.008){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>pauseMs)||(!heard&&performance.now()-started>12000)||performance.now()-started>59000)finish();},100);
     recording.ondataavailable=event=>{if(event.data.size)parts.push(event.data);};
     recording.onerror=()=>{release();if(current()){voiceConversation=false;voiceState('idle','Aufnahme fehlgeschlagen · bitte erneut versuchen');}};
     recording.onstop=async()=>{
       release();if(!current())return;
       if(!heard||!parts.length){voiceConversation=false;voiceState('idle','Keine Sprache erkannt · bitte erneut tippen');return;}
+      const endPauseSeconds=Math.max(0,(performance.now()-lastVoice)/1000);
       voiceState('transcribing');
       const wait=beginSearchWait('speech'),controller=wait.controller,timeout=setTimeout(()=>controller.abort(),180000);voiceUpload=controller;
       try{
         const transcribeStarted=performance.now();
         const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
-        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream','X-Speech-Mode':$('speech-mode')?.value==='accurate'?'accurate':'fast'},body:audio});
+        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream','X-Speech-Mode':['fast','accurate'].includes($('speech-mode')?.value)?$('speech-mode').value:'balanced'},body:audio});
         const result=await readApiResponse(response);if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
         const speechSeconds=(performance.now()-transcribeStarted)/1000;
-        const timing=$('speech-timing');if(timing){timing.hidden=false;timing.textContent='Aufnahmeende → Text: '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'+(result.timings?' · Erkennung '+Number(result.timings.recognition_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Modell laden '+Number(result.timings.model_load_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s':'');}
+        const timing=$('speech-timing');if(timing){timing.hidden=false;timing.textContent='Sprechende → Text: '+(endPauseSeconds+speechSeconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · davon Sprechpause '+endPauseSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Übertragung & Verarbeitung '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'+(result.timings?' · Erkennung '+Number(result.timings.recognition_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Modell laden '+Number(result.timings.model_load_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s':'');}
         wait.finish();$('question').value=result.text;$('question').dispatchEvent(new Event('input'));
-        if($('voice-send').checked&&!chatBusy)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle','In '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s erkannt · Text prüfen und senden');$('text-entry').open=true;}
+        if($('voice-send').checked&&!chatBusy&&!result.needs_review)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle',result.needs_review?'Ich bin bei einzelnen Wörtern unsicher · bitte Text prüfen und senden':'In '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s erkannt · Text prüfen und senden');$('text-entry').open=true;}
       }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='AbortError'?'Spracherkennung dauert zu lange · bitte erneut versuchen':e.message);}}
       finally{clearTimeout(timeout);wait.finish();if(voiceUpload===controller)voiceUpload=null;}
     };

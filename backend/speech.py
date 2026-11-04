@@ -49,7 +49,7 @@ def warm_model(data_dir):
     return True
 
 def transcribe_audio(audio:bytes,model_path:Path,*,mode='fast',metrics=None):
-    if mode not in ('fast','accurate'):raise ValueError('Unbekannter Erkennungsmodus')
+    if mode not in ('fast','balanced','accurate'):raise ValueError('Unbekannter Erkennungsmodus')
     # A cancelled HTTP request cannot cancel a running native decoder. Do not queue
     # another native recognition behind it after the async route lock was released.
     if not _lock.acquire(blocking=False):raise SpeechBusy('Spracherkennung ist gerade beschäftigt')
@@ -60,10 +60,14 @@ def transcribe_audio(audio:bytes,model_path:Path,*,mode='fast',metrics=None):
         begin=perf_counter();samples=decode_audio(io.BytesIO(audio),sampling_rate=16000);timings['audio_decode_seconds']=round(perf_counter()-begin,3)
         if len(samples)>16000*60:raise ValueError('Bitte höchstens 60 Sekunden aufnehmen.')
         begin=perf_counter()
-        options={'beam_size':1,'best_of':1,'temperature':0.0} if mode=='fast' else {'beam_size':5,'best_of':5,'temperature':(0.0,0.2,0.4,0.6,0.8,1.0)}
-        segments,_=model.transcribe(samples,language='de',vad_filter=True,vad_parameters={'threshold':0.35,'min_silence_duration_ms':1500,'speech_pad_ms':500},condition_on_previous_text=False,**options)
-        text=' '.join(segment.text.strip() for segment in segments).strip()
-        timings.update(recognition_seconds=round(perf_counter()-begin,3),total_seconds=round(perf_counter()-started,3),audio_seconds=round(len(samples)/16000,2),mode=mode,cpu_threads=cpu_threads(),model=model_path.name)
+        # One deterministic pass: no repeated temperature fallback on unclear audio.
+        options={'beam_size':{'fast':1,'balanced':3,'accurate':5}[mode],'best_of':1,'temperature':0.0}
+        segments,_=model.transcribe(samples,language='de',vad_filter=True,vad_parameters={'threshold':0.30,'min_speech_duration_ms':100,'min_silence_duration_ms':500,'speech_pad_ms':500},condition_on_previous_text=False,without_timestamps=True,**options)
+        rows=list(segments)
+        text=' '.join(segment.text.strip() for segment in rows).strip()
+        # These are uncertainty signals, not calibrated confidence percentages.
+        needs_review=any(getattr(row,'avg_logprob',0)<-1.0 or getattr(row,'compression_ratio',0)>2.4 or getattr(row,'no_speech_prob',0)>.6 for row in rows if row.text.strip())
+        timings.update(recognition_seconds=round(perf_counter()-begin,3),total_seconds=round(perf_counter()-started,3),audio_seconds=round(len(samples)/16000,2),mode=mode,needs_review=needs_review,cpu_threads=cpu_threads(),model=model_path.name)
         if metrics is not None:metrics.update(timings)
         return text
     finally:_lock.release()

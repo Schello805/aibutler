@@ -3,7 +3,7 @@ const {test}=require('node:test');const assert=require('node:assert/strict');con
 const app=fs.readFileSync('frontend/app.js','utf8');
 const decoder=app.slice(app.indexOf('async function readApiResponse'),app.indexOf('// End response decoding.'));
 const source=app.split('// Voice lifecycle:')[1].split('// End voice lifecycle.')[0];
-function harness({denied=false,pending=false,proxyFailure=false}={}){
+function harness({denied=false,pending=false,proxyFailure=false,needsReview=false}={}){
  const elements={mic:{},'voice-stop':{},'voice-send':{checked:true},question:{dispatchEvent(){}},'text-entry':{},'chat-form':{requestSubmit(){submitted++;}}};
  let submitted=0,stopped=0,uploads=0,requests=0,time=0,interval,level=.1,uploadOptions;
  const states=[],recordings=[],events={};let resolveMedia;
@@ -23,7 +23,7 @@ function harness({denied=false,pending=false,proxyFailure=false}={}){
  const context=vm.createContext({pendingSearch:null,beginSearchWait:()=>({controller:new AbortController(),finish(){}}),elements,console,Blob,Event,AbortController,Float32Array,Math,Promise,MediaRecorder:Recorder,currentUser:{id:'test-user'},authRevision:1,connected:true,chatBusy:false,
   window:{isSecureContext:true,MediaRecorder:Recorder,AudioContext,speechSynthesis:{cancel(){}}},navigator:{mediaDevices:{getUserMedia(){requests++;return denied?Promise.reject(Object.assign(new Error('denied'),{name:'NotAllowedError'})):media;}}},
   $:id=>elements[id],voiceState:(...x)=>states.push(x),api:async()=>({ready:true}),performance:{now:()=>time},setInterval:fn=>(interval=fn,1),clearInterval(){},setTimeout,clearTimeout,document:{hidden:false,addEventListener(name,fn){events[name]=fn;}},
-  fetch:async(url,options)=>{uploadOptions=options;uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?'};}};}});
+  fetch:async(url,options)=>{uploadOptions=options;uploads++;return{ok:!proxyFailure,status:proxyFailure?502:200,json:async()=>{if(proxyFailure)throw new SyntaxError('Unexpected token <');return{text:'Welche Lichter sind an?',needs_review:needsReview};}};}});
  vm.runInContext(decoder+'\n//'+source+'\nglobalThis.probe={start:()=>elements.mic.onclick(),stop:stopVoice,active:()=>voiceConversation};',context);
  return{context,elements,states,recordings,hide(){context.document.hidden=true;events.visibilitychange();},flush:()=>new Promise(r=>setImmediate(r)),speak(){level=.1;time+=150;interval();},quiet(ms){level=0;time+=ms;interval();},resolve(){resolveMedia(stream);},uploadOptions:()=>uploadOptions,stats:()=>({submitted,stopped,uploads,requests})};
 }
@@ -64,15 +64,34 @@ test('locking the phone stops recording but preserves an accepted chat request',
 });
 
 test('a thinking pause does not cut off the rest of a spoken question',async()=>{
- const h=harness();h.context.probe.start();await h.flush();h.speak();h.quiet(2200);
+ const h=harness();h.elements['speech-pause']={value:'3500'};h.context.probe.start();await h.flush();h.speak();h.quiet(2200);
  assert.equal(h.recordings[0].state,'recording');assert.equal(h.stats().uploads,0);
  h.speak();h.quiet(3400);assert.equal(h.recordings[0].state,'recording');
  h.quiet(200);await h.flush();assert.equal(h.stats().uploads,1);assert.equal(h.stats().submitted,1);
 });
 
-test('recognition mode is sent explicitly and defaults to fast without changing pause handling',async()=>{
- for(const mode of ['fast','accurate']){
-  const h=harness();h.elements['speech-mode']={value:mode};h.context.probe.start();await h.flush();h.speak();h.quiet(2200);assert.equal(h.stats().uploads,0);h.context.probe.start();await h.flush();
+test('recognition profiles preserve a selected long thinking pause',async()=>{
+ for(const mode of ['fast','balanced','accurate']){
+  const h=harness();h.elements['speech-mode']={value:mode};h.elements['speech-pause']={value:'3500'};h.context.probe.start();await h.flush();h.speak();h.quiet(2200);assert.equal(h.stats().uploads,0);h.context.probe.start();await h.flush();
   assert.equal(h.uploadOptions().headers['X-Speech-Mode'],mode);assert.equal(h.stats().submitted,1);
  }
+});
+
+test('short default pause sends after 1.3 seconds and keeps a one-second hesitation',async()=>{
+ const h=harness();h.context.probe.start();await h.flush();h.speak();h.quiet(1000);
+ assert.equal(h.recordings[0].state,'recording');h.speak();h.quiet(1200);
+ assert.equal(h.stats().uploads,0);h.quiet(200);await h.flush();
+ assert.equal(h.stats().uploads,1);assert.equal(h.stats().submitted,1);
+ assert.equal(h.uploadOptions().headers['X-Speech-Mode'],'balanced');
+});
+
+test('uncertain recognition opens editable text and never sends a device command automatically',async()=>{
+ const h=harness({needsReview:true});h.context.probe.start();await h.flush();h.speak();h.context.probe.start();await h.flush();
+ assert.equal(h.stats().submitted,0);assert.equal(h.elements['text-entry'].open,true);
+ assert.equal(h.elements.question.value,'Welche Lichter sind an?');assert.match(h.states.at(-1)[1],/unsicher/);
+});
+
+test('normal pause is respected instead of imposing a global cutoff',async()=>{
+ const h=harness();h.elements['speech-pause']={value:'2000'};h.context.probe.start();await h.flush();h.speak();h.quiet(1500);
+ assert.equal(h.stats().uploads,0);h.quiet(600);await h.flush();assert.equal(h.stats().uploads,1);
 });

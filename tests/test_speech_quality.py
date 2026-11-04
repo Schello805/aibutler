@@ -27,6 +27,8 @@ def test_transcription_keeps_all_segments_with_local_model(monkeypatch,tmp_path)
     assert calls['decode']['vad_parameters']['speech_pad_ms']==500
     assert calls['decode']['beam_size']==1
     assert calls['decode']['best_of']==1 and calls['decode']['temperature']==0.0
+    assert calls['decode']['vad_parameters']['min_speech_duration_ms']==100
+    assert calls['decode']['vad_parameters']['threshold']==.30
 
 def test_cpu_threads_respect_container_quota_and_affinity(tmp_path,monkeypatch):
     import os
@@ -59,8 +61,10 @@ def test_preload_and_profiles_reuse_one_local_model(monkeypatch,tmp_path):
     assert speech.transcribe_audio(b'fake',root,mode='accurate',metrics=accurate)=='Rollo Wohnzimmer herunterfahren.'
     assert len(builds)==1 and builds[0]['local_files_only']
     assert options[0]['beam_size']==1 and options[0]['temperature']==0.0
-    assert options[1]['beam_size']==5 and len(options[1]['temperature'])==6
+    assert options[1]['beam_size']==5 and options[1]['temperature']==0.0
+    assert all(option['without_timestamps'] for option in options)
     assert fast['audio_seconds']==1 and fast['mode']=='fast' and accurate['mode']=='accurate'
+    assert fast['needs_review'] is False and accurate['needs_review'] is False
     assert all(fast[key]>=0 for key in ('model_load_seconds','audio_decode_seconds','recognition_seconds','total_seconds'))
 
 
@@ -168,3 +172,38 @@ def test_overlapping_uploads_do_not_queue_a_second_recognition(tmp_path,monkeypa
             finally:
                 release.set();finish_upload.set();await asyncio.gather(first,second,return_exceptions=True)
     asyncio.run(scenario())
+
+
+def test_balanced_recognition_keeps_whole_sentence_and_exposes_uncertainty(monkeypatch,tmp_path):
+    import sys
+    import types
+    from backend import speech
+    options=[]
+    class Model:
+        def transcribe(self,samples,**kwargs):
+            options.append(kwargs)
+            return iter([types.SimpleNamespace(text='Bitte prüfe',avg_logprob=-.2,compression_ratio=1.1,no_speech_prob=.01),types.SimpleNamespace(text='meinen Arbeitsvertrag.',avg_logprob=-1.3,compression_ratio=1.2,no_speech_prob=.1)]),None
+    monkeypatch.setattr(speech,'load_model',lambda path:Model())
+    monkeypatch.setitem(sys.modules,'faster_whisper.audio',types.SimpleNamespace(decode_audio=lambda *a,**k:[0]*16000))
+    metrics={}
+    assert speech.transcribe_audio(b'synthetic',tmp_path,mode='balanced',metrics=metrics)=='Bitte prüfe meinen Arbeitsvertrag.'
+    assert metrics['needs_review'] is True
+    assert options[0]['beam_size']==3 and options[0]['temperature']==0.0
+    assert options[0]['without_timestamps'] is True
+
+
+def test_balanced_api_default_passes_review_flag_without_audio_or_internal_scores(tmp_path,monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.config import Settings
+    from backend.main import create_app
+    from backend import speech
+    def transcribe(audio,path,*,mode,metrics):
+        assert mode=='balanced'
+        metrics['needs_review']=True
+        return 'Erfundene unsichere Frage.'
+    monkeypatch.setattr(speech,'transcribe_audio',transcribe)
+    app=create_app(Settings(_env_file=None,data_dir=tmp_path,api_token='test',worker_enabled=False))
+    with TestClient(app) as client:
+        result=client.post('/api/speech/transcribe',headers={'Authorization':'Bearer test','Content-Type':'application/octet-stream'},content=b'synthetic-audio')
+        assert result.status_code==200 and result.json()['needs_review'] is True
+        assert result.json()['mode']=='balanced' and 'synthetic-audio' not in result.text
