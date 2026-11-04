@@ -1,0 +1,25 @@
+{
+  "description": "Fester, reproduzierbarer Fragenkatalog. Keine privaten Quellen und keine kostenpflichtigen Modellaufrufe.",
+  "cases": [
+    {"question":"Wie viele Urlaubstage habe ich bei Sielaff?","sources":["email","paperless"],"query":"Sielaff"},
+    {"question":"Seit wann habe ich meinen Motorradführerschein?","sources":["paperless"],"query":"Führerschein"},
+    {"question":"Wann wurde meine Heizung zuletzt gewartet?","sources":["email","paperless"],"query":"Wartung"},
+    {"question":"Wie lautet meine Steuer-ID?","sources":["email","paperless"],"query":"Identifikationsnummer"},
+    {"question":"Was wollte Tanja zuletzt von mir?","sources":["email"],"intent":"person","sender":"Tanja"},
+    {"question":"Was habe ich zuletzt bestellt?","sources":["email","paperless"],"intent":"purchases"},
+    {"question":"Wo habe ich mich zuletzt angemeldet?","sources":["email"],"intent":"account"},
+    {"question":"Welche Termine habe ich morgen?","sources":["calendar"]},
+    {"question":"Was steht morgen im Kalender?","sources":["calendar"]},
+    {"question":"Wie ist die Telefonnummer von Tanja?","sources":["contacts"]},
+    {"question":"Ist mein Paket schon angekommen?","sources":["email","ntfy"],"query":"Klingel"},
+    {"question":"Wann hat es zuletzt geklingelt?","sources":["ntfy"]},
+    {"question":"Kann ich morgen draußen streichen?","sources":["email","paperless","calendar"],"public":[true,true]},
+    {"question":"Wie wird das Wetter morgen?","public_only":true,"public":[true,false]},
+    {"question":"Ist nächsten Montag bei mir Feiertag?","public_only":true,"public":[false,true]},
+    {"question":"Was ist Photosynthese?","kind":"general"},
+    {"question":"Wie funktioniert Bluetooth auf einem Smartphone?","kind":"general"},
+    {"question":"Wie hoch sind meine Stromkosten?","kind":"clarify","clarification":"electricity_costs"},
+    {"question":"Kannst du mich gut verstehen?","kind":"reply"},
+    {"question":"Hallo Butler","kind":"reply"}
+  ]
+}

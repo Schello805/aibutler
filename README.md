@@ -676,3 +676,18 @@ Die 3,5 Sekunden Sprechpause bleiben bestehen. Beschleunigt wird die anschließe
 Unter **Sprache & Optionen → Spracherkennung** ist **Schnell** voreingestellt: ein Suchpfad und eine feste Decodierung ohne die bisherigen zusätzlichen Temperatur-Durchläufe. Das spart Rechenarbeit, kann bei schwieriger Aussprache oder Geräuschen aber andere Erkennungsergebnisse liefern. **Gründlich · langsamer** nutzt die bisherige umfangreichere Suche. Die Auswahl wird auf dem jeweiligen Browser gespeichert. CPU-Threads berücksichtigen nun auch Linux-/LXC-CPU-Quota und CPU-Affinität (höchstens vier). Während der Erkennung starten keine neuen Hintergrund-Indexierdurchläufe oder Sprachsynthesen; bereits laufende native Berechnungen werden dadurch nicht unterbrochen. Konkurrierende Erkennungen werden mit „beschäftigt“ zurückgewiesen, statt sich unbemerkt anzustellen.
 
 Nach einer Spracheingabe zeigt der Optionsbereich **Aufnahmeende → Text** mit der gemessenen Dauer aus Übertragung und Verarbeitung sowie Modell-Lade- und Erkennungszeit. Die API `/api/speech/transcribe` liefert zusätzlich `timings` mit Audio-Decodierung, Modell-Laden und Erkennung; `X-Speech-Mode` erlaubt `fast` oder `accurate`. Zeiten enthalten keine Audio- oder Textinhalte. Der erkannte Text wird sofort verwendet, ohne auf die Vorbereitung einer gesprochenen Antwort zu warten. Die tatsächliche Geschwindigkeit und Erkennungsqualität auf dem LXC hängen weiterhin von CPU-Zuteilung, Last, Aufnahme und Mikrofon ab; eine konkrete Sekunden-Garantie wurde auf deinem LXC nicht gemessen. Für den Vergleich sollten dieselben kurzen Sätze in beiden Modi getestet werden.
+
+### Automatische Regressionstests bei Änderungen
+
+`sh scripts/check.sh` führt die vollständigen Backend-Tests, alle JavaScript-Interaktionstests und den synthetischen Belegvergleich gemeinsam aus. Der zusätzliche feste Fragenkatalog in `tests/fixtures/question_regression.json` prüft Dokumente, E-Mails, Termine, Kontakte, Paket-/Klingelereignisse, Wetter, Feiertage, Allgemeinwissen, Smartphone-Wissen und notwendige Rückfragen. Gesprächsfolgen und die Auswahl zwischen Abschlag und Geräteverbrauch werden ebenfalls geprüft. Die übrige Testsuite deckt unter anderem Smart-Home-Zustände, Quellenkombinationen, Sprache, Abbruch und Antwort-Streaming ab. Die Fragen sind bewusst reproduzierbar statt bei jedem Lauf zufällig; neue Fehler bekommen einen zusätzlichen Regressionstest.
+
+Für die Entwicklung sind Python mit `requirements.txt` und Node.js (22 in CI) erforderlich. Nach einem neuen Checkout den lokalen Schutz aktivieren:
+
+```bash
+git config core.hooksPath .githooks
+sh scripts/check.sh
+```
+
+Der Hook prüft vor jedem Commit und verhindert ihn bei fehlgeschlagenen Tests. GitHub Actions führt denselben Prüfablauf bei jedem Push und Pull Request aus; der JUnit-Bericht liegt anschließend als Workflow-Artefakt bereit. Die Projektanweisungen in `AGENTS.md` verlangen den Lauf nach jeder abgeschlossenen Codeänderung. Es läuft kein dauernder Testprozess bei jedem Tastendruck. Der Installer prüft weiterhin vor dem Versionswechsel die Backend-Suite einschließlich des neuen Fragenkatalogs; Node.js wird dafür auf dem LXC nicht benötigt.
+
+Automatische Läufe verwenden erfundene Belege und simulierte Dienste, ohne kostenpflichtige Modellanfragen oder echte Geräteschaltungen. Sie sichern die getesteten Abläufe und Regeln ab; die tatsächliche Antwortqualität und Latenz des externen Anbieters sowie Mikrofon-/Audioqualität auf dem Handy müssen zusätzlich geprüft werden. Der optionale `--llm`-Vergleich bleibt dafür getrennt verfügbar.
