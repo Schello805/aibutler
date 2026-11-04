@@ -90,3 +90,45 @@ def test_index_first_skips_planning_and_live_calls_but_explicit_research_does_no
         assert fast['retrieval_mode']=='indexed' and calls==[]
         deep=client.post('/api/chat',headers=headers,json={**body,'research':True}).json()
         assert deep['retrieval_mode']=='live_enriched' and 'live' in calls
+
+
+def test_followup_stream_keeps_context_and_finishes_after_initial_window(tmp_path,monkeypatch):
+    from backend.main import RetrievalPlan
+    from backend.answer_wait import complete_answer
+    app=create_app(config(tmp_path))
+    conversation=app.state.store.save_exchange(None,'Welche Großkatzen gibt es? ',{'answer':'Löwe und Tiger.'})
+    async def plan(*args,**kwargs):return RetrievalPlan(intent='general',sources=[],queries=[])
+    async def bounded(operation):
+        return await complete_answer(operation,first_text_timeout=.04,idle_timeout=.2,total_timeout=1)
+    async def stream(settings,instructions,payload):
+        history=str(payload['conversation'])
+        assert 'Löwe und Tiger' in history and 'Großkatzen' in history
+        yield 'Die andere '
+        await asyncio.sleep(.09)
+        yield 'Großkatze heißt Tiger.'
+    monkeypatch.setattr('backend.main.plan_question',plan)
+    monkeypatch.setattr('backend.main.complete_answer',bounded)
+    monkeypatch.setattr('backend.intelligence.generate_stream',stream)
+    with TestClient(app) as client:
+        response=client.post('/api/chat/stream',headers={'Authorization':'Bearer test'},json={'message':'Ja und die andere Großkatze heißt?','conversation_id':conversation,'share_external':True,'request_id':'d'*32})
+        final=[json.loads(block.split('data: ',1)[1]) for block in response.text.split('\n\n') if block.startswith('event: result')][0]
+        assert final['answer']=='Die andere Großkatze heißt Tiger.'
+        assert final['external_used'] and not final.get('interrupted')
+        assert len(app.state.store.conversation(conversation,None)['messages'])==4
+
+
+def test_general_stream_timeout_is_marked_interrupted(tmp_path,monkeypatch):
+    from backend.answer_wait import complete_answer
+    async def bounded(operation):
+        return await complete_answer(operation,first_text_timeout=.02,idle_timeout=.03,total_timeout=.1)
+    async def stream(*args,**kwargs):
+        await asyncio.Event().wait()
+        yield 'Unreachable'
+    monkeypatch.setattr('backend.main.complete_answer',bounded)
+    monkeypatch.setattr('backend.intelligence.generate_stream',stream)
+    app=create_app(config(tmp_path))
+    with TestClient(app) as client:
+        response=client.post('/api/chat/stream',headers={'Authorization':'Bearer test'},json={'message':'Was ist Photosynthese?','share_external':True,'request_id':'e'*32})
+        final=[json.loads(block.split('data: ',1)[1]) for block in response.text.split('\n\n') if block.startswith('event: result')][0]
+        assert final['interrupted'] and not final['external_used']
+        assert 'noch keine Antwort' in final['answer']
