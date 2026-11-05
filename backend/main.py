@@ -927,7 +927,7 @@ def create_app(settings=None):
     frontend = Path(__file__).resolve().parent.parent/'frontend'
     # Freeze the displayed revision and asset URLs to the same running release.
     import hashlib,subprocess
-    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js','speech.js','chat_stream.js','benchmark.js','controls.js'))).hexdigest()[:10]
+    ui_revision=hashlib.sha256(b''.join((frontend/name).read_bytes() for name in ('index.html','style.css','app.js','memory.js','speech.js','chat_stream.js','benchmark.js','controls.js','live_speech.js','capture-worklet.js'))).hexdigest()[:10]
     root=frontend.parent.resolve()
     release_match=re.fullmatch(r'\d{8}T\d{6}Z-([a-f0-9]{12})',root.name)
     revision=release_match.group(1) if release_match else ''

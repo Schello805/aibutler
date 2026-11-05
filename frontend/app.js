@@ -428,15 +428,17 @@ $('speech-pause').value=['1300','2000','3500'].includes(localStorage.getItem('bu
 $('speech-pause').onchange=()=>localStorage.setItem('butler-speech-pause',$('speech-pause').value);
 $('speech-mode').onchange=()=>localStorage.setItem('butler-speech-mode',$('speech-mode').value);
 // Voice lifecycle: each capture belongs to one user and one cancellable turn.
-let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null;
-function stopVoice(cancelChat=true){window.ButlerSpeech?.stop();if(pendingSearch&&(pendingSearch.kind==='speech'||(voiceConversation&&cancelChat)))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();window.speechSynthesis?.cancel();voiceState('idle');}
+let recorder=null,voiceConversation=false,voiceStarting=false,voiceEpoch=0,voiceUpload=null,liveCapture=null,voiceRelease=null;
+function stopVoice(cancelChat=true){liveCapture?.cancel();liveCapture=null;if($('voice-transcript')){$('voice-transcript').hidden=true;$('voice-transcript').textContent='';}window.ButlerSpeech?.stop();if(pendingSearch&&(pendingSearch.kind==='speech'||(voiceConversation&&cancelChat)))pendingSearch.cancel();voiceEpoch++;voiceUpload?.abort();voiceUpload=null;voiceConversation=false;if(recorder?.state==='recording')recorder.stop();voiceRelease?.();window.speechSynthesis?.cancel();voiceState('idle');}
 async function startLocalRecording(){
   if(recorder||chatBusy||voiceStarting)return;
   const actor=currentUser?.id,revision=authRevision,turn=voiceEpoch;if(!actor)return;
   const current=()=>currentUser?.id===actor&&authRevision===revision&&turn===voiceEpoch&&voiceConversation&&connected;
   if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){voiceConversation=false;voiceState('idle','Mikrofon benötigt HTTPS und einen unterstützten Browser');return;}
-  voiceStarting=true;voiceState('starting');let stream,context,timer,recording;
-  const release=()=>{clearInterval(timer);stream?.getTracks().forEach(t=>t.stop());if(context&&context.state!=='closed')context.close().catch(()=>{});if(recorder===recording)recorder=null;};
+  voiceStarting=true;voiceState('starting');let stream,context,timer,recording,live,releasedStream;
+  if($('voice-transcript')){$('voice-transcript').hidden=true;$('voice-transcript').textContent='';}
+  const release=()=>{clearInterval(timer);if(stream&&releasedStream!==stream){stream.getTracks().forEach(t=>t.stop());releasedStream=stream;}if(context&&context.state!=='closed')context.close().catch(()=>{});if(recorder===recording)recorder=null;if(voiceRelease===release)voiceRelease=null;};
+  voiceRelease=release;
   try{
     // Resume inside the tap gesture: Safari can otherwise keep the analyser suspended.
     context=new (window.AudioContext||window.webkitAudioContext)();
@@ -446,32 +448,46 @@ async function startLocalRecording(){
     const source=context.createMediaStreamSource(stream),analyser=context.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
     const samples=new Float32Array(analyser.fftSize),parts=[];
     const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
-    recording=new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:128000});recorder=recording;
+    const speechMode=['fast','accurate'].includes($('speech-mode')?.value)?$('speech-mode').value:'balanced';
+    if(window.ButlerLiveSpeech){
+      try{live=await window.ButlerLiveSpeech.create(context,source,{current,onpartial:text=>{if(current()&&$('voice-transcript')){$('voice-transcript').hidden=false;$('voice-transcript').textContent=text;}},transcribe:async(audio,signal)=>{
+        const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:AbortSignal.any([signal,AbortSignal.timeout(60000)]),headers:{'Content-Type':'application/octet-stream','X-Speech-Mode':speechMode},body:audio});
+        return readApiResponse(response);
+      }});}catch{live=null;} // Unsupported/blocked worklets retain complete-file recording.
+    }
+    if(!current()){live?.cancel();return;}
+    recording=live||new MediaRecorder(stream,{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:128000});recorder=recording;liveCapture=live;
+
     let heard=false,lastVoice=performance.now();const started=lastVoice;
     const pauseValue=Number($('speech-pause')?.value),pauseMs=[1300,2000,3500].includes(pauseValue)?pauseValue:1300;
     const finish=()=>{if(recording.state==='recording')recording.stop();};
     timer=setInterval(()=>{if(recording.state!=='recording')return;analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);if(rms>0.008){heard=true;lastVoice=performance.now();}if((heard&&performance.now()-lastVoice>pauseMs)||(!heard&&performance.now()-started>12000)||performance.now()-started>59000)finish();},100);
     recording.ondataavailable=event=>{if(event.data.size)parts.push(event.data);};
-    recording.onerror=()=>{release();if(current()){voiceConversation=false;voiceState('idle','Aufnahme fehlgeschlagen · bitte erneut versuchen');}};
+    recording.onerror=()=>{live?.cancel();release();if(current()){voiceConversation=false;voiceState('idle','Aufnahme fehlgeschlagen · bitte erneut versuchen');}};
     recording.onstop=async()=>{
-      release();if(!current())return;
-      if(!heard||!parts.length){voiceConversation=false;voiceState('idle','Keine Sprache erkannt · bitte erneut tippen');return;}
+      release();if(!current()){live?.cancel();return;}
+      if(!heard||(!live&&!parts.length)){live?.cancel();voiceConversation=false;voiceState('idle','Keine Sprache erkannt · bitte erneut tippen');return;}
       const endPauseSeconds=Math.max(0,(performance.now()-lastVoice)/1000);
-      voiceState('transcribing');
+      voiceState('transcribing',live?'Ich vervollständige deine Frage …':undefined);
       const wait=beginSearchWait('speech'),controller=wait.controller,timeout=setTimeout(()=>controller.abort(),180000);voiceUpload=controller;
       try{
         const transcribeStarted=performance.now();
+        let result;
+        if(live){controller.signal.addEventListener('abort',()=>live.cancel(),{once:true});result=await live.result();}
+        else{
         const audio=new Blob(parts,{type:recording.mimeType});if(audio.size>4*1024*1024)throw new Error('Aufnahme zu groß · bitte eine kürzere Frage stellen.');
         const response=await fetch('/api/speech/transcribe',{method:'POST',credentials:'same-origin',signal:controller.signal,headers:{'Content-Type':'application/octet-stream','X-Speech-Mode':['fast','accurate'].includes($('speech-mode')?.value)?$('speech-mode').value:'balanced'},body:audio});
-        const result=await readApiResponse(response);if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
+        result=await readApiResponse(response);
+        }
+        if(!current())return;if(!result.text?.trim())throw new Error('Keine Sprache erkannt.');
         const speechSeconds=(performance.now()-transcribeStarted)/1000;
-        const timing=$('speech-timing');if(timing){timing.hidden=false;timing.textContent='Sprechende → Text: '+(endPauseSeconds+speechSeconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · davon Sprechpause '+endPauseSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Übertragung & Verarbeitung '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'+(result.timings?' · Erkennung '+Number(result.timings.recognition_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Modell laden '+Number(result.timings.model_load_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s':'');}
-        wait.finish();$('question').value=result.text;$('question').dispatchEvent(new Event('input'));
-        if($('voice-send').checked&&!chatBusy&&!result.needs_review)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle',result.needs_review?'Ich bin bei einzelnen Wörtern unsicher · bitte Text prüfen und senden':'In '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s erkannt · Text prüfen und senden');$('text-entry').open=true;}
+        const timing=$('speech-timing');if(timing){timing.hidden=false;timing.textContent='Sprechende → Text: '+(endPauseSeconds+speechSeconds).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · davon Sprechpause '+endPauseSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s · '+(live?'Restverarbeitung':'Übertragung & Verarbeitung')+' '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s'+(result.timings?' · Erkennung '+Number(result.timings.recognition_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s · Modell laden '+Number(result.timings.model_load_seconds||0).toLocaleString('de-DE',{maximumFractionDigits:1})+' s':'')+(live?' · '+result.chunks+' Sprachabschnitt'+(result.chunks===1?'':'e'):'');}
+        wait.finish();if($('voice-transcript')){$('voice-transcript').hidden=true;$('voice-transcript').textContent='';}$('question').value=result.text;$('question').dispatchEvent(new Event('input'));
+        if($('voice-send').checked&&!chatBusy&&!result.needs_review)$('chat-form').requestSubmit();else{voiceConversation=false;voiceState('idle',result.partial?'Nur teilweise erkannt · bitte Text ergänzen oder erneut sprechen':result.needs_review?'Ich bin bei einzelnen Wörtern unsicher · bitte Text prüfen und senden':'In '+speechSeconds.toLocaleString('de-DE',{maximumFractionDigits:1})+' s erkannt · Text prüfen und senden');$('text-entry').open=true;}
       }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='AbortError'?'Spracherkennung dauert zu lange · bitte erneut versuchen':e.message);}}
-      finally{clearTimeout(timeout);wait.finish();if(voiceUpload===controller)voiceUpload=null;}
+      finally{clearTimeout(timeout);wait.finish();if(voiceUpload===controller)voiceUpload=null;if(liveCapture===live)liveCapture=null;}
     };
-    recording.start();voiceState('recording');
+    recording.start();voiceState('recording');if(live)$('voice-hint').textContent='Wird während des Sprechens lokal erkannt · tippen zum Abschließen';
   }catch(e){if(current()){voiceConversation=false;voiceState('idle',e.name==='NotAllowedError'?'Mikrofonzugriff erlauben und erneut tippen':e.message);}}
   finally{voiceStarting=false;if(recording?.state!=='recording')release();}
 }
